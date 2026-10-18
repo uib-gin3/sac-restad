@@ -4,10 +4,12 @@
 # oldschool way by hand, just using AI tools as a search assistant.
 
 import re
-import math
 import time
+import operator
 
-from statistics import mean, stdev, quantiles
+from math import sqrt
+from functools import reduce
+from statistics import mean, stdev, quantiles, StatisticsError
 
 from bottle import Bottle, response, request, run
 
@@ -16,7 +18,18 @@ mem = {}
 
 app = Bottle()
 
-valid_operations = ["add", "sub", "div", "mult", "sqrt", "mean", "std", "reset"]
+# Operations are not important, we want to focus on the 
+# API side so lets be compact and hacky (which is fun and not convinient
+# on real projects)
+operations = {
+    "add": lambda operands: reduce(operator.add, operands),
+    "sub": lambda operands: reduce(operator.sub, operands),
+    "div": lambda operands: reduce(operator.truediv, operands),
+    "mult": lambda operands: reduce(operator.mul, operands),
+    "sqrt": lambda operands: sqrt(operands),
+    "mean": lambda operands: mean(operands),
+    "std": lambda operands: stdev(operands),
+}
 
 
 def djb2_hex(text):
@@ -50,6 +63,9 @@ def store_session(session, value):
     " Stores session value
     """
     mem[session] = value
+
+def get_session(session):
+    return mem[session]
 
 
 @app.hook('before_request')
@@ -101,24 +117,28 @@ def calculate(numbers, operation):
 
     pattern = r'^[-+]?(?:\d+\.?\d*|\.\d+)(?:,[-+]?(?:\d+\.?\d*|\.\d+))*$'
     if not re.match(pattern, numbers):
-        response.status = 422
+        response.status = 400
         return "Error: invalid number(s)"
 
-    if operation not in valid_operations:
+    if operation not in operations.keys():
         response.status = 409
         return "Error: not a valid operation"
 
     operands = [float(n) if '.' in n else int(n) for n in numbers.split(',')]
 
-    if operation == 'add':
-        result = sum(operands)
+    try:
+        result = operations[operation](operands)
+    except (ArithmeticError, StatisticsError) as exc:
+        response.status = 422
+        return f"Error: {exc}"
+
 
     if request.method == 'POST':
         session = create_session(request)
         store_session(session, result)
 
         response.status = 201
-        base_url = request.url.rstrip('/')
+        base_url = f"{request.urlparts.scheme}://{request.urlparts.netloc}"
         response.set_header('Location', f'{base_url}/session/{session}')
 
     else: # is GET
@@ -129,7 +149,7 @@ def calculate(numbers, operation):
 
 @app.get("/session/<session>")
 def get(session):
-    return djb2_hex("Hello")
+    return str(get_session(session))
 
 
 if __name__ == "__main__":
