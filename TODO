@@ -1,0 +1,5 @@
+- Add memcached
+- Rethink operations and URLs
+- Container with gunicorn + memcached
+- Benchmark 
+- Compare with other

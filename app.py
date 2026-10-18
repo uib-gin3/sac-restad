@@ -5,6 +5,7 @@
 
 import re
 import time
+import random
 import operator
 
 from math import sqrt
@@ -19,8 +20,8 @@ mem = {}
 app = Bottle()
 
 # Operations are not important, we want to focus on the 
-# API side so lets be compact and hacky (which is fun and not convinient
-# on real projects)
+# API side so: lets be compact and hacky, which is fun yet not convinient
+# on real projects.
 operations = {
     "add": lambda operands: reduce(operator.add, operands),
     "sub": lambda operands: reduce(operator.sub, operands),
@@ -33,7 +34,7 @@ operations = {
 
 
 def djb2_hex(text):
-    """ Simple hash function given a text return hex hash
+    """ Simple hash function given a text return hex hash.
     " Daniel J. Bernstein is just awesome, just a tribute <3
     " http://www.cse.yorku.ca/~oz/hash.html
     """
@@ -50,22 +51,39 @@ def djb2_hex(text):
 def create_session(request):
     """
     " Given a request returns a session_id
+    " Hashing some connection elements + random to avoid colisions.
     """
     timestamp = str(time.time())
     client_ip = request.environ.get('REMOTE_ADDR', '')
     client_port = request.environ.get('REMOTE_PORT', '')
+    rnd = random.random()
 
-    return djb2_hex(f"{timestamp}:{client_ip}:{client_port}")
+    return djb2_hex(f"{timestamp}:{client_ip}:{client_port}:{rnd}")
 
 
-def store_session(session, value):
+def store_session(session, value, external=False):
     """
     " Stores session value
+    " If external is false it assumed that a single process is doing
+    " the work so just a shared dict is fine.
+    " If shared is true we use an external shared memory across
+    " all processes.
     """
-    mem[session] = value
 
-def get_session(session):
-    return mem[session]
+    if not external:
+        mem[session] = value
+        return # Finished if not shared, simple and easy
+
+    # TODO
+
+
+
+def get_session(session, shared=False):
+
+    if not shared:
+        return mem[session]
+
+    # TODO
 
 
 @app.hook('before_request')
@@ -145,6 +163,18 @@ def calculate(numbers, operation):
         response.status = 200
 
     return str(result)
+
+
+def get(session):
+    """
+    " Just return the stored value for that session
+    """
+    return str(get_session(session))
+
+
+@app.get("/session/<session>/<operation>")
+def get(session):
+    return str(get_session(session))
 
 
 @app.get("/session/<session>")
