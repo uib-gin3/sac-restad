@@ -54,6 +54,8 @@ Is needed uv and uvx.
 
 ## Design decisions
 
+No versioning too simple to version
+
 Normally I would go Flask. The code would be really clean. But lets do it manually stdlib way
 
 JSON si really popular on REST APIS but is just a convetion, is not really needed.
