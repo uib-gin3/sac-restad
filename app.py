@@ -21,15 +21,18 @@ from bottle import Bottle, response, request, run
 
 ######################### Setup mem system ###################################
 
+class LockTimeout(Exception):
+    pass
+
 USE_REDIS = '--redis' in sys.argv or os.environ.get('USE_REDIS') == '1'
 
 if USE_REDIS:
     import redis
-    mem = redis.Redis(host='redis', port=6379, db=0, decode_response=True)
+    mem = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
 
     class acquire_lock:
         def __init__(self):
-            self.lock = client.lock('restad', timeout=5, blocking_timeout=2.0)
+            self.lock = mem.lock('restad', timeout=5, blocking_timeout=2.0)
             
         def __enter__(self):
             try:
@@ -74,7 +77,10 @@ def store_session(session, value):
 def get_session(session):
 
     if USE_REDIS:
-        return json.loads(mem.get(session))
+        data = mem.get(session)
+        if data is None:
+            raise KeyError(session)
+        return json.loads(data)
     else:
         return mem[session]
 
