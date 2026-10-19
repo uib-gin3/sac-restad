@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 
-# AI: Except for djb2_hex all the code in this file has been implemented
-# oldschool way by hand, just using AI tools as a search assistant.
+# Except for djb2_hex, the regex and acquire_lock (AI generated) all the code
+# in this file has been implemented oldschool way by hand, just using AI tools
+# as a search assistant.
 
 import re
+import os
+import sys
 import time
+import json
 import random
 import operator
 
@@ -15,25 +19,75 @@ from statistics import mean, stdev, quantiles, StatisticsError
 from bottle import Bottle, response, request, run
 
 
-mem = {}
+######################### Setup mem system ###################################
 
-app = Bottle()
+USE_REDIS = '--redis' in sys.argv or os.environ.get('USE_REDIS') == '1'
+
+if USE_REDIS:
+    import redis
+    mem = redis.Redis(host='redis', port=6379, db=0, decode_response=True)
+
+    class acquire_lock:
+        def __init__(self):
+            self.lock = client.lock('restad', timeout=5, blocking_timeout=2.0)
+            
+        def __enter__(self):
+            try:
+                self.lock.__enter__()
+            except redis.exceptions.LockError:
+                raise LockTimeout()
+                
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            self.lock.__exit__(exc_type, exc_val, exc_tb)
+
+else:
+    import multiprocessing
+
+    manager = multiprocessing.Manager()
+    mem = manager.dict()
+    lock = manager.Lock()
+
+    class acquire_lock:
+        def __enter__(self):
+            if not lock.acquire(timeout=2.0):
+                raise LockTimeout()
+                
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            lock.release()
 
 
-# Operations are not important, we want to focus on the 
-# API side so: lets be compact and hacky, which is fun yet not convinient
-# on real projects.
-operations = {
-    "add": lambda operands: reduce(operator.add, operands),
-    "sub": lambda operands: reduce(operator.sub, operands),
-    "div": lambda operands: reduce(operator.truediv, operands),
-    "mult": lambda operands: reduce(operator.mul, operands),
-                                                                     # Force the error
-    "sqrt": lambda operands: sqrt(operands[0]) if len(operands) == 1 else sqrt(operands),
-    "mean": lambda operands: mean(operands),
-    "std": lambda operands: stdev(operands),
-}
+def store_session(session, value):
+    """
+    " Stores session value
+    " If external is false it assumed that a single process is doing
+    " the work so just a shared dict is fine.
+    " If shared is true we use an external shared memory across
+    " all processes.
+    """
 
+    if USE_REDIS:
+        mem.set(session, json.dumps(value))
+    else:
+        mem[session] = value
+
+
+def get_session(session):
+
+    if USE_REDIS:
+        return json.loads(mem.get(session))
+    else:
+        return mem[session]
+
+
+def delete_session(session):
+
+    if USE_REDIS:
+        mem.delete(session)
+    else:
+        mem.pop(session)
+
+    
+######################### Some aux functions ###################################
 
 def djb2_hex(text):
     """ Simple hash function given a text return hex hash.
@@ -63,30 +117,6 @@ def generate_id():
     return djb2_hex(f"{timestamp}:{client_ip}:{client_port}:{rnd}")
 
 
-def store_session(session, value, external=False):
-    """
-    " Stores session value
-    " If external is false it assumed that a single process is doing
-    " the work so just a shared dict is fine.
-    " If shared is true we use an external shared memory across
-    " all processes.
-    """
-
-    if not external:
-        mem[session] = value
-        return # Finished if not shared, simple and easy
-
-    # TODO shared=True
-
-
-def get_session(session, shared=False):
-
-    if not shared:
-        return mem[session]
-
-    # TODO shared=True
-
-
 def parse_operands():
     """
     " Extract and parse the operands from request body
@@ -104,7 +134,7 @@ def parse_operands():
         parsed['error'] = str(exc)
         return parsed
 
-    # Thanks AI for writting sucha good regex :D (hope it has no bugs)
+    # Thanks AI for writting such a good regex :D (hope it has no bugs)
     pattern = r'^[-+]?(?:\d+\.?\d*|\.\d+)(?:,[-+]?(?:\d+\.?\d*|\.\d+))*$'
     if not re.match(pattern, raw_data):
         parsed['status'] = 400
@@ -114,6 +144,25 @@ def parse_operands():
     return {
         'data': [float(n) if '.' in n else int(n) for n in raw_data.split(',')]
     }
+
+######################### The app itself ###################################
+
+app = Bottle()
+
+
+# Operations are not important, we want to focus on the 
+# API side so: lets be compact and hacky, which is fun yet not convinient
+# on real projects.
+operations = {
+    "add": lambda operands: reduce(operator.add, operands),
+    "sub": lambda operands: reduce(operator.sub, operands),
+    "div": lambda operands: reduce(operator.truediv, operands),
+    "mult": lambda operands: reduce(operator.mul, operands),
+                                                                     # Force the error
+    "sqrt": lambda operands: sqrt(operands[0]) if len(operands) == 1 else sqrt(operands),
+    "mean": lambda operands: mean(operands),
+    "std": lambda operands: stdev(operands),
+}
 
 
 @app.hook('before_request')
@@ -188,16 +237,15 @@ def update(calc_id):
         return parsed['error']
 
 
-    # TODO do with lock!
-    try:
-        operands = get_session(calc_id)
-    except KeyError:
-        response.status = 404
-        return f'Error: calc {calc_id} does not exists'
+    with acquire_lock():
+        try:
+            operands = get_session(calc_id)
+        except KeyError:
+            response.status = 404
+            return f'Error: calc {calc_id} does not exists'
 
-    operands.extend(parsed['data'])
-    store_session(calc_id, operands)
-    # END TODO LOCK
+        operands.extend(parsed['data'])
+        store_session(calc_id, operands)
 
     response.status = 200
     return str(len(operands))
@@ -255,5 +303,21 @@ def calculate(calc_id, operation):
     return str(result)
 
 
+@app.delete("/calc/<calc_id>")
+def delete(calc_id):
+
+    try:
+        data = get_session(calc_id)
+    except KeyError:
+        response.status = 404
+        return f'Error: calc {calc_id} does not exists'
+    
+    delete_session(calc_id)
+
+    response.status = 204
+    return
+
+
 if __name__ == "__main__":
+
     run(app, host="127.0.0.1", port=12345, reloader=True, debug=True)
