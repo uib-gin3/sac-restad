@@ -8,6 +8,11 @@ In unix daemons finalize with a `d` so: we ask a bunch of unix processes running
 
 ## Abstract
 
+A simple REST API implemented with Python + Bottle to implement a basic calculator. Restad can run by itself as a single python process, multiprocess with gunicorn and opionally use Redis as backend when deployed in different containers / servers.
+
+The development has been done following KISS (Keep it Simple Stupid) and UNIX philosophy (do one thing and do it well). As Redis already needed a container a Dockerfile and docker-compose.yml has been added as well.
+º
+
 ## Assignment
 
 Implement a **calculator** as a REST service, in any language you choose:
@@ -19,11 +24,25 @@ Justify the design and implementation decisions taken under the SD (shared-state
 
 **Delivery**: in AD (the campus delivery system), include the link to the (publicly accessible) repository containing the source code and the relevant descriptions.
 
+
+## Design decisions
+
+No versioning for the REST API, is too simple.
+
+Normally I would go Flask or Django RESTframework. But will go even simpler with `bottle`.
+
+JSON si really popular on REST APIS but is just a convetion, is not really needed, this API si not JSON, just plain strings. Numbers can be separated by commas to be lists.
+
+To avoid a collisions used a hash based on timestamp + source ip + source port + some randomness. Hash function selected djb2, not becuase the best just becuse  DJB is awesome and always deserve credit.
+
+The implementation has a dual way to operate with standard python shared memory or Redis. Locks also suport both backends.
+
+Let's imagine an entity which is 'number list' so tryied to understand verbs from https://www.rfc-editor.org/rfc/rfc9110.html and use them properly on it.
+
 ## Idea
 
 This is just for fun, to play with the REST concepts and a calculator.
 
-Let's imagine an entity which is 'number list'.
 
 This number list can be created (POST) with one or multiple númbers. You can GET the values as is or GET the desired operation result.
 
@@ -90,26 +109,15 @@ Finally we can DELETE the operation when no longer needed.
     # Will respond 404
 
 
-## Design decisions
-
-No versioning too simple to version
-
-Normally I would go Flask or Django RESTframework. But will go even simpler with bottle.
-
-JSON si really popular on REST APIS but is just a convetion, is not really needed.
-
-To avoid a collision of requests taken the timestamp + source ip + source port and hash it. Hash function selected djb2, not becuase the best just becus  DJB is awesome and always deserve credit.
-
-Lock operation?
-
-reset -> clear
-
-https://www.rfc-editor.org/rfc/rfc9110.html
 
 ## Observations
 
 ## AI usage
 
-gemini 3.1 pro web com un cercador
-gemini implementació de djb2
+- gemini-3.1-pro (web): Translate <assignment title> to English
+- gemini-3.1-pro (web): Many lookups of information about python libraries
+- gemini-3.1-pro (web): Implement djb2 hash function
+- MiniMax-M3.1-flash (opencode): Develop restad-client, restad-test, restad-bench & restadapi.py
+- MiMo-2.6-flash (opencode): Can you check spell and grammar of README.md. Suggest the minimal changes keeping the style.
+- MiMo-2.6-flash (opencode): Do the same f
 
