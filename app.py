@@ -19,6 +19,7 @@ mem = {}
 
 app = Bottle()
 
+
 # Operations are not important, we want to focus on the 
 # API side so: lets be compact and hacky, which is fun yet not convinient
 # on real projects.
@@ -27,7 +28,8 @@ operations = {
     "sub": lambda operands: reduce(operator.sub, operands),
     "div": lambda operands: reduce(operator.truediv, operands),
     "mult": lambda operands: reduce(operator.mul, operands),
-    "sqrt": lambda operands: sqrt(operands),
+                                                                     # Force the error
+    "sqrt": lambda operands: sqrt(operands[0]) if len(operands) == 1 else sqrt(operands),
     "mean": lambda operands: mean(operands),
     "std": lambda operands: stdev(operands),
 }
@@ -48,7 +50,7 @@ def djb2_hex(text):
     return f"{hash_val:08x}"
 
 
-def create_session(request):
+def generate_id():
     """
     " Given a request returns a session_id
     " Hashing some connection elements + random to avoid colisions.
@@ -74,8 +76,7 @@ def store_session(session, value, external=False):
         mem[session] = value
         return # Finished if not shared, simple and easy
 
-    # TODO
-
+    # TODO shared=True
 
 
 def get_session(session, shared=False):
@@ -83,7 +84,36 @@ def get_session(session, shared=False):
     if not shared:
         return mem[session]
 
-    # TODO
+    # TODO shared=True
+
+
+def parse_operands():
+    """
+    " Extract and parse the operands from request body
+    " @return a dict with:
+    "   data -> with the list of operands (if no error)
+    "   status -> with the status code to be given if error
+    "   error -> with the error Message
+    """
+    parsed = {}
+
+    try:
+        raw_data = request.body.read().decode('utf-8')
+    except UnicodeDecodeError as exc:
+        prased['status'] = 400
+        parsed['error'] = str(exc)
+        return parsed
+
+    # Thanks AI for writting sucha good regex :D (hope it has no bugs)
+    pattern = r'^[-+]?(?:\d+\.?\d*|\.\d+)(?:,[-+]?(?:\d+\.?\d*|\.\d+))*$'
+    if not re.match(pattern, raw_data):
+        parsed['status'] = 400
+        parsed['error'] = "Invalid number(s)"
+        return parsed
+
+    return {
+        'data': [float(n) if '.' in n else int(n) for n in raw_data.split(',')]
+    }
 
 
 @app.hook('before_request')
@@ -106,80 +136,118 @@ def set_final_headers():
         response.set_header('X-Response-Time', f"{elapsed_time:.4f}s")
 
 
-@app.post("/session")
-def create():
-    timestamp = str(time.time())
-    client_ip = request.environ.get('REMOTE_ADDR', '')
-    client_port = request.environ.get('REMOTE_PORT', '')
+# POST creates and generates id
+@app.post("/calc")
+# PUT is idempotent user chooses id
+@app.put("/calc/<calc_id>")
+def create(calc_id=None):
+    """
+    " Create a new calculus adding the payload of comma separaed numbers
+    " (if given). Will return the calc-id to use in futher requests.
+    "
+    "   /calculate
+    "   body: 1,2
+    "
+    "   200 OK
+    "   3db3123f21314
+    """
 
-    session = djb2_hex(f"{timestamp}:{client_ip}:{client_port}")
+    parsed = parse_operands()
+    if 'error' in parsed:
+        response.status = parsed['status']
+        return parsed['error']
+
+    if not calc_id:
+        calc_id = generate_id()
+
+    store_session(calc_id, parsed['data'])
 
     response.status = 201
-    base_url = request.url.rstrip('/')
-    response.set_header('Location', f'{base_url}/{session}')
+    base_url = request.url.strip('/')
+    response.set_header('Location', f'{base_url}/{calc_id}')
 
-    return session
+    return str(calc_id)
 
 
-@app.route("/calculate/<numbers>/<operation>", method=['GET', 'POST'])
-def calculate(numbers, operation):
+@app.patch("/calc/<calc_id>")
+def update(calc_id):
     """
-    " Given a list of numbers and an operation return the value:
-    "   /calculate/1,2/add
+    " Add operands to an existng calculus as a list of comma separaed numbers.
+    " Will return the current amount of operands.
+    "
+    "   /calc/<calc_id>
+    "   body: 3,4
+    "
+    "   200 OK
+    "   4
+    """
+
+    parsed = parse_operands()
+    if 'error' in parsed:
+        response.status = parsed['status']
+        return parsed['error']
+
+
+    # TODO do with lock!
+    try:
+        operands = get_session(calc_id)
+    except KeyError:
+        response.status = 404
+        return f'Error: calc {calc_id} does not exists'
+
+    operands.extend(parsed['data'])
+    store_session(calc_id, operands)
+    # END TODO LOCK
+
+    response.status = 200
+    return str(len(operands))
+
+
+@app.get("/calc/<calc_id>")
+def get(calc_id):
+
+    try:
+        data = get_session(calc_id)
+    except KeyError:
+        response.status = 404
+        return f'Error: calc {calc_id} does not exists'
+
+    return ",".join([str(x) for x in data]) 
+
+
+@app.route("/calc/<calc_id>/<operation>", method=['GET', 'POST'])
+def calculate(calc_id, operation):
+    """
+    " Returns the desired operatin applied to the stored operand list
+    " Does not modifyies the list (PUT would)
+    "   /calc/31f6266f/add
     "
     "   200 OK
     "   3
-    " GET just calculate
-    " POST also create a session accumulating the given result
     """
-
-    pattern = r'^[-+]?(?:\d+\.?\d*|\.\d+)(?:,[-+]?(?:\d+\.?\d*|\.\d+))*$'
-    if not re.match(pattern, numbers):
-        response.status = 400
-        return "Error: invalid number(s)"
 
     if operation not in operations.keys():
         response.status = 409
         return "Error: not a valid operation"
 
-    operands = [float(n) if '.' in n else int(n) for n in numbers.split(',')]
+    try:
+        operands = get_session(calc_id)
+    except KeyError:
+        response.status = 404
+        return f'Error: calc {calc_id} does not exists'
 
     try:
         result = operations[operation](operands)
-    except (ArithmeticError, StatisticsError) as exc:
+    except (ArithmeticError, StatisticsError, TypeError) as exc:
         response.status = 422
         return f"Error: {exc}"
 
-
     if request.method == 'POST':
-        session = create_session(request)
-        store_session(session, result)
+        store_session(calc_id, [result])
 
-        response.status = 201
-        base_url = f"{request.urlparts.scheme}://{request.urlparts.netloc}"
-        response.set_header('Location', f'{base_url}/session/{session}')
-
-    else: # is GET
-        response.status = 200
+    response.status = 200
 
     return str(result)
-
-
-def get(session):
-    """
-    " Just return the stored value for that session
-    """
-    return str(get_session(session))
-
-
-@app.get("/session/<session>/<operation>")
-def get(session):
-    return str(get_session(session))
-
-
-@app.get("/session/<session>")
-def get(session):
-    return str(get_session(session))
 
 
 if __name__ == "__main__":

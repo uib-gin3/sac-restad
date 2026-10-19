@@ -1,5 +1,5 @@
 - Add memcached
-- Rethink operations and URLs
+- Add clear / reset operation
 - Container with gunicorn + memcached
 - Benchmark 
 - Compare with other

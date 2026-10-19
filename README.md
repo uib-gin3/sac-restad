@@ -48,15 +48,54 @@ Is needed uv and uvx.
 
 ## Server interface
 
-    POST localhost:12345 12.2,4,10,5
+Tried to follow HTTP Verb sematincs https://www.rfc-editor.org/rfc/rfc9110.html
 
-    GET 
+Create a calculus with POST, you can send the first list of numbers in the payload:
+
+    POST localhost:12345/calc --raw 3,4,5,6
+    # Will return the calc-id as response and in the Location header
+
+You can also create a calcules by PUTing all the content into the one you define.
+
+    PUT localhost:12345/calc/my-calc --raw 3,4,5,6
+
+Numbers can be added with PATCH
+
+    PATCH localhost:12345/calc/<calc-id> --raw 7,8,9
+    # <some-id> will contain the list 3,4,5,6,7,8,9
+
+You can GET the content without an operation just responds the number list.
+
+    GET localhost:12345/calc/<calc-id
+    # Will respond 3,4,5,6,7,8,9
+
+You alse can can GET the result (without modifing the calcc) appending an operation
+
+    GET localhost:12345/calc/<calc-id>/add
+    # Will respond the meaning of life (42)
+
+We can get the result as well as POSTing it into a consolidated result:
+
+    POST localhost:12345/calc/<calc-id>/add
+    # Will respond 42
+
+    GET localhost:12345/calc/<calc-id>
+    # Will respond 42
+
+Finally we can DELETE the operation when no longer needed.
+
+    DELETE localhost:12345/calc/<calc-id>
+    # Will delete it
+
+    GET localhost:12345/calc/<calc-id>
+    # Will respond 404
+
 
 ## Design decisions
 
 No versioning too simple to version
 
-Normally I would go Flask. The code would be really clean. But lets do it manually stdlib way
+Normally I would go Flask or Django RESTframework. But will go even simpler with bottle.
 
 JSON si really popular on REST APIS but is just a convetion, is not really needed.
 
@@ -66,7 +105,7 @@ Lock operation?
 
 reset -> clear
 
-
+https://www.rfc-editor.org/rfc/rfc9110.html
 
 ## Observations
 
