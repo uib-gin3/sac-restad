@@ -1,5 +1,0 @@
-- Add memcached
-- Add clear / reset operation
-- Container with gunicorn + memcached
-- Benchmark 
-- Compare with other
