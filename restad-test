@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+
+# This file has been fully vibe-coded with MiniMax-M3.1-Flash on OpenCode
+
+# restad-test: functional test of the restad REST API.
+#
+# Walks the whole API surface (every verb and every error path) and checks
+# that the server answers what the API promises. Standard library only.
+#
+#     ./restad-test
+#     ./restad-test -H 127.0.0.1 -p 8000
+
+import argparse
+import http.client
+import random
+import string
+import sys
+
+from restadapi import Restad, DEFAULT_HOST, DEFAULT_PORT
+
+
+class Checker:
+    """ Keeps the results of the checks and prints them. """
+
+    def __init__(self):
+        self.passed = 0
+        self.failed = 0
+
+    def check(self, name, got, expected):
+        if got == expected:
+            self.passed += 1
+            print(f"[ OK ] {name}")
+            return True
+
+        self.failed += 1
+        print(f"[FAIL] {name}: expected {expected!r} got {got!r}")
+        return False
+
+
+def random_id():
+    """ An id unlikely to collide with the calci of other runs. """
+
+    suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+
+    return f"test-{suffix}"
+
+
+def run_checks(client, out):
+    """ Run all the checks against the server. """
+
+    # -- POST /calc: the server chooses the id ------------------------------
+
+    response = client.request('POST', '/calc', '3,4,5,6')
+    out.check("POST /calc answers 201", response.status, 201)
+
+    calc_id = response.text.strip()
+    out.check("POST /calc answers the calc id", len(calc_id), 8)
+    out.check("POST /calc answers a Location header",
+              response.header('location', '').endswith(f"/calc/{calc_id}"), True)
+
+    # -- PUT /calc/<id>: the user chooses the id ---------------------------
+
+    my_id = random_id()
+    response = client.request('PUT', f'/calc/{my_id}', '3,4,5,6')
+    out.check("PUT /calc/<id> answers 201", response.status, 201)
+    out.check("PUT /calc/<id> answers a Location header",
+              response.header('location', '').endswith(f"/calc/{my_id}"), True)
+
+    # -- PATCH /calc/<id>: more operands -----------------------------------
+
+    response = client.request('PATCH', f'/calc/{my_id}', '7,8')
+    out.check("PATCH /calc/<id> answers 200", response.status, 200)
+    out.check("PATCH /calc/<id> answers the amount of operands",
+              response.text, "6")
+
+    # -- GET /calc/<id>: the list of operands ------------------------------
+
+    response = client.request('GET', f'/calc/{my_id}')
+    out.check("GET /calc/<id> answers 200", response.status, 200)
+    out.check("GET /calc/<id> answers the list of operands",
+              response.text, "3,4,5,6,7,8")
+
+    # -- GET /calc/<id>/<operation>: the result ----------------------------
+
+    response = client.request('GET', f'/calc/{my_id}/add')
+    out.check("GET /calc/<id>/add answers 200", response.status, 200)
+    out.check("GET /calc/<id>/add answers the result", response.text, "33")
+
+    response = client.request('GET', f'/calc/{my_id}/sub')
+    out.check("GET /calc/<id>/sub answers the result", response.text, "-27")
+
+    response = client.request('GET', f'/calc/{my_id}/mult')
+    out.check("GET /calc/<id>/mult answers the result", response.text, "20160")
+
+    response = client.request('GET', f'/calc/{my_id}/mean')
+    out.check("GET /calc/<id>/mean answers the result", response.text, "5.5")
+
+    # -- POST /calc/<id>/<operation>: the result is kept -------------------
+
+    response = client.request('POST', f'/calc/{my_id}/add')
+    out.check("POST /calc/<id>/add answers 200", response.status, 200)
+    out.check("POST /calc/<id>/add answers the result", response.text, "33")
+
+    response = client.request('GET', f'/calc/{my_id}')
+    out.check("POST /calc/<id>/add keeps the result in the calculus",
+              response.text, "33")
+
+    # -- GET /calc/<id>/reset: forget the operands -------------------------
+
+    response = client.request('GET', f'/calc/{my_id}/reset')
+    out.check("GET /calc/<id>/reset answers 200", response.status, 200)
+    out.check("GET /calc/<id>/reset answers resetted", response.text, "resetted")
+
+    response = client.request('GET', f'/calc/{my_id}')
+    out.check("GET /calc/<id>/reset empties the calculus", response.text, "")
+
+    # -- DELETE /calc/<id>: forget the calculus ----------------------------
+
+    response = client.request('DELETE', f'/calc/{my_id}')
+    out.check("DELETE /calc/<id> answers 204", response.status, 204)
+    out.check("DELETE /calc/<id> answers an empty body", response.text, "")
+
+    response = client.request('GET', f'/calc/{my_id}')
+    out.check("GET /calc/<id> answers 404 once deleted", response.status, 404)
+
+    # -- the error paths ----------------------------------------------------
+
+    other_id = random_id()
+    client.request('PUT', f'/calc/{other_id}', '1,2')
+
+    response = client.request('GET', f'/calc/{other_id}/frobnicate')
+    out.check("GET /calc/<id>/<unknown operation> answers 409", response.status, 409)
+
+    client.request('DELETE', f'/calc/{other_id}')
+
+    response = client.request('POST', '/calc', 'not a number')
+    out.check("POST /calc with a wrong body answers 400", response.status, 400)
+
+    response = client.request('POST', '/calc', '3, 4')
+    out.check("POST /calc with spaces answers 400", response.status, 400)
+
+    response = client.request('POST', '/calc', b'\xff\xfe')
+    out.check("POST /calc with a non utf-8 body answers 400", response.status, 400)
+
+    response = client.request('PATCH', '/calc/does-not-exist', '1')
+    out.check("PATCH /calc/<unknown id> answers 404", response.status, 404)
+
+    response = client.request('GET', '/calc/does-not-exist/add')
+    out.check("GET /calc/<unknown id>/add answers 404", response.status, 404)
+
+    # -- the operations that cannot be computed ----------------------------
+
+    response = client.request('PUT', f'/calc/{my_id}', '1,0')
+    response = client.request('GET', f'/calc/{my_id}/div')
+    out.check("GET /calc/<id>/div by zero answers 422", response.status, 422)
+
+    response = client.request('PUT', f'/calc/{my_id}', '5')
+    response = client.request('GET', f'/calc/{my_id}/std')
+    out.check("GET /calc/<id>/std with a single value answers 422", response.status, 422)
+
+    response = client.request('PUT', f'/calc/{my_id}', '-4')
+    response = client.request('GET', f'/calc/{my_id}/sqrt')
+    out.check("GET /calc/<id>/sqrt of a negative number answers 422", response.status, 422)
+
+    # Cleaning up
+    client.request('DELETE', f'/calc/{my_id}')
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog='restad-test',
+        description="Check that the restad REST API answers what it promises.")
+    parser.add_argument('-H', '--host', default=DEFAULT_HOST,
+                        help="server host (default: 127.0.0.1)")
+    parser.add_argument('-p', '--port', type=int, default=DEFAULT_PORT,
+                        help="server port (default: 12345)")
+    parser.add_argument('-t', '--timeout', type=float, default=10.0,
+                        help="socket timeout in seconds (default: 10)")
+    args = parser.parse_args()
+
+    out = Checker()
+    client = Restad(args.host, args.port, timeout=args.timeout)
+
+    try:
+        run_checks(client, out)
+    except (OSError, http.client.HTTPException) as exc:
+        print(f"[FAIL] the server is not answering: {exc}", file=sys.stderr)
+        out.failed += 1
+    finally:
+        client.close()
+
+    print()
+    print(f"{out.passed + out.failed} checks, {out.failed} failed")
+
+    return 1 if out.failed else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

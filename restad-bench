@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+
+# This file has been fully vibe-coded with MiniMax-M3.1-Flash on OpenCode
+
+# restad-bench: benchmark for the restad REST calculator.
+#
+# Same shape as the sac-bench of the socket version: a bunch of clients
+# sending requests with an exponential inter-arrival time during a given
+# duration, reporting the throughput, the errors, the volume of data
+# exchanged and the response time.
+#
+# One operation of the benchmark is what a user would do with the API:
+#
+#     POST   /calc              create the calculus with the operands
+#     GET    /calc/<id>/<op>    apply the operation
+#     DELETE /calc/<id>         forget the calculus
+#
+# The socket version did the same (clear + numbers + operation) but in a
+# single round trip, here every step is a HTTP request.
+#
+# Standard library only.
+
+import argparse
+import http.client
+import random
+import sys
+import threading
+import time
+
+from restadapi import Restad, DEFAULT_HOST, DEFAULT_PORT
+
+OPS = ('add', 'sub', 'div', 'mult', 'sqrt', 'mean', 'std')
+
+
+class BenchClient(threading.Thread):
+    """ One simulated user: a thread sending operations to the server. """
+
+    def __init__(self, host, port, args, deadline, stop):
+        super().__init__(daemon=True)
+        self.host = host
+        self.port = port
+        self.args = args
+        self.deadline = deadline
+        self.stop = stop
+        self.client = Restad(self.host, self.port, timeout=args.timeout)
+        self.served = 0
+        self.errors = 0
+        self.errors_4xx = 0
+        self.errors_5xx = 0
+        self.failed = 0
+        self.requests = 0
+        self.latencies = []       # one per HTTP request
+        self.server_times = []    # the X-Response-Time header, one per request
+
+    def payload(self):
+        """ The operation and the operands of the next request. """
+
+        if self.args.op:
+            op = self.args.op
+        else:
+            op = random.choice(OPS)
+
+        if self.args.n is not None:
+            count = self.args.n
+        elif op == 'sqrt':
+            count = 1
+        else:
+            count = random.randint(20, 50)
+
+        numbers = [random.randint(1, 100) for _ in range(count)]
+
+        return op, numbers
+
+    def do(self, method, path, body=None):
+        """ Send a request and account for it. """
+
+        start = time.monotonic()
+        response = self.client.request(method, path, body)
+        elapsed = time.monotonic() - start
+
+        self.requests += 1
+        self.latencies.append(elapsed)
+
+        # The server measures its own response time, useful to know how much
+        # of the time is spent in the server and how much in the network.
+        server_time = response.header('x-response-time')
+        if server_time:
+            try:
+                self.server_times.append(float(server_time.rstrip('s')))
+            except ValueError:
+                pass
+
+        return response
+
+    def error(self, response):
+        """ Account for a response that is not the expected one. """
+
+        self.errors += 1
+
+        if response.status >= 500:
+            self.errors_5xx += 1
+        else:
+            self.errors_4xx += 1
+
+    def operation(self):
+        """ One operation: create the calculus, apply the operation, delete it. """
+
+        op, numbers = self.payload()
+        body = ','.join(str(number) for number in numbers)
+
+        response = self.do('POST', '/calc', body)
+        if response.status != 201:
+            self.error(response)
+            return
+
+        calc_id = response.text.strip()
+
+        try:
+            response = self.do('GET', f'/calc/{calc_id}/{op}')
+            if not response.ok:
+                self.error(response)
+        finally:
+            response = self.do('DELETE', f'/calc/{calc_id}')
+            if response.status != 204:
+                self.error(response)
+
+        self.served += 1
+
+    def run(self):
+        rng = random.Random()
+
+        try:
+            while not self.stop.is_set() and time.monotonic() < self.deadline:
+                if self.args.rate > 0:
+                    remaining = self.deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    delay = min(rng.expovariate(self.args.rate), remaining)
+                    if self.stop.wait(delay):
+                        break
+                    if time.monotonic() >= self.deadline:
+                        break
+
+                try:
+                    self.operation()
+                except (OSError, http.client.HTTPException) as exc:
+                    # The connection died, the operation is lost
+                    self.failed += 1
+                    self.errors += 1
+                    print(f"client: {exc}", file=sys.stderr)
+                    self.client.close()
+        finally:
+            self.client.close()
+
+
+def percentile(sorted_samples, p):
+    if not sorted_samples:
+        return 0.0
+    k = (len(sorted_samples) - 1) * p / 100
+    lo = int(k)
+    hi = min(lo + 1, len(sorted_samples) - 1)
+    return sorted_samples[lo] + (sorted_samples[hi] - sorted_samples[lo]) * (k - lo)
+
+
+def snapshot(clients):
+    return {
+        'served': sum(c.served for c in clients),
+        'requests': sum(c.requests for c in clients),
+        'errors': sum(c.errors for c in clients),
+        'errors_4xx': sum(c.errors_4xx for c in clients),
+        'errors_5xx': sum(c.errors_5xx for c in clients),
+        'failed': sum(c.failed for c in clients),
+        'conns': sum(c.client.connections for c in clients),
+        'bytes_sent': sum(c.client.bytes_sent for c in clients),
+        'bytes_recv': sum(c.client.bytes_recv for c in clients),
+        'latency_sum': sum(sum(c.latencies) for c in clients),
+        'server_sum': sum(sum(c.server_times) for c in clients),
+    }
+
+
+def report(clients, interval, deadline, stop, t0):
+    prev = snapshot(clients)
+    prev_t = time.monotonic()
+    while not stop.wait(interval):
+        now = time.monotonic()
+        if now >= deadline:
+            break
+        cur = snapshot(clients)
+        dt = now - prev_t
+        window = cur['served'] - prev['served']
+        requests = cur['requests'] - prev['requests']
+        avg = 0.0
+        if requests:
+            avg = (cur['latency_sum'] - prev['latency_sum']) / requests
+        print(f"[{now - t0:6.1f}s] served={cur['served']} "
+              f"(+{window}, {window / dt:7.1f} ops/s) "
+              f"reqs={cur['requests']} errors={cur['errors']} "
+              f"conns={cur['conns']} "
+              f"tx={cur['bytes_sent']}B rx={cur['bytes_recv']}B "
+              f"resp_avg={avg * 1000:.2f}ms",
+              flush=True)
+        prev, prev_t = cur, now
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog='restad-bench',
+        description="Benchmark the restad REST calculator.")
+    parser.add_argument('-c', '--clients', type=int, default=1,
+                        help="number of concurrent clients (default: 1)")
+    parser.add_argument('-r', '--rate', type=float, required=True,
+                        help="operations per second per client "
+                             "(exponential inter-arrival, 0 for unlimited)")
+    parser.add_argument('-d', '--duration', type=float, required=True,
+                        help="experiment duration in seconds")
+    parser.add_argument('-H', '--host', default=DEFAULT_HOST,
+                        help="server host (default: 127.0.0.1)")
+    parser.add_argument('-p', '--port', type=int, default=DEFAULT_PORT,
+                        help="server port (default: 12345)")
+    parser.add_argument('-o', '--op', choices=OPS,
+                        help="fixed operation (default: random each request)")
+    parser.add_argument('-n', '--numbers', type=int, default=None, dest='n',
+                        help="fixed operand count (default: 1 for sqrt, "
+                             "random 20-50 otherwise)")
+    parser.add_argument('-i', '--interval', type=float, default=1.0,
+                        help="stats interval in seconds (default: 1.0)")
+    parser.add_argument('-t', '--timeout', type=float, default=10.0,
+                        help="socket timeout in seconds (default: 10)")
+    args = parser.parse_args()
+
+    if args.clients < 1:
+        parser.error("-c must be >= 1")
+    if args.rate < 0:
+        parser.error("-r must be >= 0")
+    if args.duration <= 0:
+        parser.error("-d must be > 0")
+    if args.n is not None and args.n < 1:
+        parser.error("-n must be >= 1")
+
+    stop = threading.Event()
+    t0 = time.monotonic()
+    deadline = t0 + args.duration
+    clients = [BenchClient(args.host, args.port, args, deadline, stop)
+               for _ in range(args.clients)]
+
+    offered = "unlimited" if args.rate == 0 else f"{args.clients * args.rate:.1f} ops/s"
+    print(f"restad-bench: {args.clients} clients, "
+          f"{'unlimited' if args.rate == 0 else f'{args.rate} ops/s each'}, "
+          f"(total {offered}), {args.duration}s "
+          f"against {args.host}:{args.port}", flush=True)
+
+    reporter = threading.Thread(
+        target=report, args=(clients, args.interval, deadline, stop, t0),
+        daemon=True)
+    reporter.start()
+
+    for c in clients:
+        c.start()
+    for c in clients:
+        c.join()
+
+    stop.set()
+    reporter.join()
+    elapsed = time.monotonic() - t0
+
+    stats = snapshot(clients)
+    samples = sorted(l for c in clients for l in c.latencies)
+    server_samples = sorted(t for c in clients for t in c.server_times)
+    total = stats['served']
+
+    print()
+    print("=== summary ===")
+    print(f"duration        : {elapsed:.2f}s")
+    print(f"clients         : {args.clients}")
+    print(f"offered rate    : {offered}")
+    print(f"operations      : {total}")
+    print(f"requests        : {stats['requests']}")
+    print(f"throughput      : {total / elapsed:.1f} ops/s "
+          f"({stats['requests'] / elapsed:.1f} req/s)")
+    print(f"errors          : {stats['errors']}")
+    print(f"  4xx           : {stats['errors_4xx']}")
+    print(f"  5xx           : {stats['errors_5xx']}")
+    print(f"  failed        : {stats['failed']}")
+    print(f"connections     : {stats['conns']}")
+    print(f"bytes sent      : {stats['bytes_sent']}")
+    print(f"bytes received  : {stats['bytes_recv']}")
+    if samples:
+        print(f"response time   : min={samples[0] * 1000:.2f}ms "
+              f"avg={sum(samples) / len(samples) * 1000:.2f}ms "
+              f"p50={percentile(samples, 50) * 1000:.2f}ms "
+              f"p95={percentile(samples, 95) * 1000:.2f}ms "
+              f"p99={percentile(samples, 99) * 1000:.2f}ms "
+              f"max={samples[-1] * 1000:.2f}ms")
+    else:
+        print("response time   : no samples")
+    if server_samples:
+        print(f"server time     : avg={sum(server_samples) / len(server_samples) * 1000:.2f}ms "
+              f"p95={percentile(server_samples, 95) * 1000:.2f}ms "
+              f"(X-Response-Time)")
+
+    return 1 if stats['errors'] else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

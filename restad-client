@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+
+# This file has been fully vibe-coded with MiniMax-M3.1-Flash on OpenCode
+
+# restad-client: command line client for the restad REST calculator.
+#
+# It creates a calculus with the given numbers, applies the operation and
+# prints the result. Standard library only.
+#
+# Examples:
+#
+#     ./restad-client -o add 3 4 5
+#     ./restad-client -o mean 1 2 3 4
+#     ./restad-client -o sqrt -i my-calc
+#     ./restad-client -v -o mult 2 3
+
+import argparse
+import http.client
+import sys
+
+from restadapi import Restad, RestadError, OPERATIONS, DEFAULT_HOST, DEFAULT_PORT
+
+
+def format_operand(value):
+    """ Format an operand so the server is able to parse it.
+
+    " The server only understands plain decimal notation, so no scientific
+    " notation here: 1e-05 would be rejected with a 400.
+    """
+
+    number = float(value)
+
+    if number.is_integer():
+        return str(int(number))
+
+    text = repr(number)
+
+    if 'e' in text or 'E' in text:
+        text = f"{number:f}"
+
+    return text
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog='restad-client',
+        description="Send numbers and an operation to the restad REST calculator.")
+    parser.add_argument('-H', '--host', default=DEFAULT_HOST,
+                        help="server host (default: 127.0.0.1)")
+    parser.add_argument('-p', '--port', type=int, default=DEFAULT_PORT,
+                        help="server port (default: 12345)")
+    parser.add_argument('-o', '--op', default='add', choices=OPERATIONS,
+                        help="operation to apply (default: add)")
+    parser.add_argument('-i', '--calc-id',
+                        help="use an existing calculus instead of creating a new one")
+    parser.add_argument('-c', '--consolidate', action='store_true',
+                        help="keep the result in the calculus (POST instead of GET)")
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help="show the HTTP conversation")
+    parser.add_argument('-t', '--timeout', type=float, default=10.0,
+                        help="socket timeout in seconds (default: 10)")
+    parser.add_argument('numbers', nargs='*', type=float, metavar='N',
+                        help="operands of the operation")
+    args = parser.parse_args()
+
+    operands = [format_operand(number) for number in args.numbers]
+
+    client = Restad(args.host, args.port, timeout=args.timeout, verbose=args.verbose)
+
+    try:
+        if args.calc_id:
+            calc_id = args.calc_id
+        else:
+            calc_id, _ = client.create(operands)
+
+        response = client.apply(calc_id, args.op, store=args.consolidate)
+
+    except RestadError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except (OSError, http.client.HTTPException) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        client.close()
+
+    print(response.text)
+
+    if not response.ok or response.text.startswith("Error"):
+        return 1
+
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
