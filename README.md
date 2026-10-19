@@ -50,7 +50,7 @@ If running without Redis containers can be avoided and used uv / uvx. Tested wit
 
 ### Production multiprocess with gunicorn + redis
 
-
+    docker compose up
 
 ### Test
 
@@ -58,6 +58,10 @@ If running without Redis containers can be avoided and used uv / uvx. Tested wit
     PATCH localhost:12345/calc/my-calc --raw 7,8,9
     GET localhost:12345/calc/my-calc/add
     # Will respond the meaning of life (42)
+
+### Benchmark
+
+    ./restard-bench -c 5 -r 10 -d 30
 
 
 ## Server interface
