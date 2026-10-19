@@ -24,35 +24,18 @@ Justify the design and implementation decisions taken under the SD (shared-state
 
 **Delivery**: in AD (the campus delivery system), include the link to the (publicly accessible) repository containing the source code and the relevant descriptions.
 
-
-## Design decisions
-
-No versioning for the REST API, is too simple.
-
-Normally I would go Flask or Django RESTframework. But will go even simpler with `bottle`.
-
-JSON si really popular on REST APIS but is just a convetion, is not really needed, this API si not JSON, just plain strings. Numbers can be separated by commas to be lists.
-
-To avoid a collisions used a hash based on timestamp + source ip + source port + some randomness. Hash function selected djb2, not becuase the best just becuse  DJB is awesome and always deserve credit.
-
-The implementation has a dual way to operate with standard python shared memory or Redis. Locks also suport both backends.
-
-Let's imagine an entity which is 'number list' so tryied to understand verbs from https://www.rfc-editor.org/rfc/rfc9110.html and use them properly on it.
-
-## Idea
-
-This is just for fun, to play with the REST concepts and a calculator.
-
-
-This number list can be created (POST) with one or multiple númbers. You can GET the values as is or GET the desired operation result.
-
-Also that values can be consilidated PUTing them into a single one.
-
-Also more values can be added with the PATCH operation.
-
 ## Setup
 
-Is needed uv and uvx.
+This project has been tested on Debian 13 and docker 29.9.0 with the compose plugin.
+
+It should just be needed bash, docker and docker compose.
+
+If running without Redis containers can be avoided and used uv / uvx. Tested with 0.11.8.
+
+
+## Usage example
+
+### Some useful alias
 
     alias GET="uvx --from httpie http GET"
     alias POST="uvx --from httpie http POST"
@@ -60,9 +43,22 @@ Is needed uv and uvx.
     alias PATCH="uvx --from httpie http PATCH"
     alias DELETE="uvx --from httpie http DELETE"
 
-## Usage example
+### Run simple way, single process redis
 
     uv run --with bottle==0.13.4 python app.py
+
+
+### Production multiprocess with gunicorn + redis
+
+
+
+### Test
+
+    PUT localhost:12345/calc/my-calc --raw 3,4,5,6
+    PATCH localhost:12345/calc/my-calc --raw 7,8,9
+    GET localhost:12345/calc/my-calc/add
+    # Will respond the meaning of life (42)
+
 
 ## Server interface
 
@@ -90,7 +86,7 @@ You can GET the content without an operation just responds the number list.
 You alse can can GET the result (without modifing the calcc) appending an operation
 
     GET localhost:12345/calc/my-calc/add
-    # Will respond the meaning of life (42)
+    # Will respond 42
 
 We can get the result as well as POSTing it into a consolidated result:
 
@@ -108,6 +104,20 @@ Finally we can DELETE the operation when no longer needed.
     GET localhost:12345/calc/my-calc
     # Will respond 404
 
+
+## Design decisions
+
+No versioning for the REST API, is too simple.
+
+Normally I would go Flask or Django RESTframework. But will go even simpler with `bottle`.
+
+JSON si really popular on REST APIS but is just a convetion, is not really needed, this API si not JSON, just plain strings. Numbers can be separated by commas to be lists.
+
+To avoid a collisions used a hash based on timestamp + source ip + source port + some randomness. Hash function selected djb2, not becuase the best just becuse  DJB is awesome and always deserve credit.
+
+The implementation has a dual way to operate with standard python shared memory or Redis. Locks also suport both backends.
+
+Let's imagine an entity which is 'number list' so tryied to understand verbs from https://www.rfc-editor.org/rfc/rfc9110.html and use them properly on it.
 
 
 ## Observations
