@@ -66,7 +66,7 @@ Numbers can be added with PATCH
 
 You can GET the content without an operation just responds the number list.
 
-    GET localhost:12345/calc/<calc-id
+    GET localhost:12345/calc/my-calc
     # Will respond 3,4,5,6,7,8,9
 
 You alse can can GET the result (without modifing the calcc) appending an operation
