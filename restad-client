@@ -53,6 +53,8 @@ def main():
                         help="operation to apply (default: add)")
     parser.add_argument('-i', '--calc-id',
                         help="use an existing calculus instead of creating a new one")
+    parser.add_argument('--put', action='store_true',
+                        help="create the calculus with the chosen id (PUT /calc/<id>)")
     parser.add_argument('-c', '--consolidate', action='store_true',
                         help="keep the result in the calculus (POST instead of GET)")
     parser.add_argument('-v', '--verbose', action='store_true',
@@ -63,6 +65,9 @@ def main():
                         help="operands of the operation")
     args = parser.parse_args()
 
+    if args.put and not args.calc_id:
+        parser.error("--put needs a calculus id (-i/--calc-id)")
+
     operands = [format_operand(number) for number in args.numbers]
 
     client = Restad(args.host, args.port, timeout=args.timeout, verbose=args.verbose)
@@ -70,6 +75,17 @@ def main():
     try:
         if args.calc_id:
             calc_id = args.calc_id
+            if args.put:
+                # The user chooses the id, so the calculus is created (or
+                # overwritten, PUT is idempotent) with it.
+                client.create(operands, calc_id=calc_id)
+            elif operands:
+                # The calculus already exists, so the operands are added
+                # to it (PATCH) instead of creating a new one.
+                patched = client.patch(calc_id, operands)
+                if not patched.ok:
+                    raise RestadError(f"cannot add the operands: "
+                                      f"{patched.status} {patched.text}")
         else:
             calc_id, _ = client.create(operands)
 
