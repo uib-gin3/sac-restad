@@ -1,18 +1,24 @@
 # restad REST Daemon that knows how to "restar"
 
-Rest -> Application Programming Interface y Representational State Transfer
-Resta -> Substract in spanish
-Restad -> Plural of substract in spanish (imperative).
+- Rest -> Application Programming Interface y Representational State Transfer
+- Resta -> Substract in spanish
+- Restad -> Plural of substract in spanish (imperative).
 
-Unix daemons finalize with a `d`: we ask a bunch of unix processes running as a daemon to act as a REST API able to `restar`, so unix processes `restad` this numbers.
+Unix daemons finalize with a `d`: we ask a bunch of unix processes running as
+a daemon to act as a REST API able to `restar`, so unix processes `restad` this
+numbers.
 
 
 ## Abstract
 
-A simple REST API implemented with Python + Bottle to implement a basic calculator. Restad can run by itself as a single python process, multiprocess with gunicorn and opionally use Redis as backend when deployed in different containers / servers.
+A simple REST API implemented with Python + Bottle to implement a basic
+calculator. Restad can run by itself as a single python process, multiprocess
+with gunicorn and opionally use Redis as backend when deployed in different
+containers / servers.
 
-The development has been done following KISS (Keep it Simple Stupid) and UNIX philosophy (do one thing and do it well). As Redis already needed a container a Dockerfile and docker-compose.yml has been added as well.
-º
+The development has been done following KISS (Keep it Simple Stupid) and UNIX
+philosophy (do one thing and do it well). As Redis already needed a container
+a Dockerfile and docker-compose.yml has been added as well.
 
 
 ## Assignment
@@ -20,11 +26,14 @@ The development has been done following KISS (Keep it Simple Stupid) and UNIX ph
 Implement a **calculator** as a REST service, in any language you choose:
   add, sub, div, mult, sqrt, mean, std and reset.
 
-The user must keep their last value, which is why the special `reset` operation exists.
+The user must keep their last value, which is why the special `reset` operation
+exists.
 
-Justify the design and implementation decisions taken under the SD (shared-state) paradigm.
+Justify the design and implementation decisions taken under the SD (shared-state)
+paradigm.
 
-**Delivery**: in AD (the campus delivery system), include the link to the (publicly accessible) repository containing the source code and the relevant descriptions.
+**Delivery**: in AD (the campus delivery system), include the link to the (publicly
+accessible) repository containing the source code and the relevant descriptions.
 
 
 ## Setup
@@ -119,20 +128,28 @@ Finally you can DELETE the calc when no longer needed.
 
 No versioning for the REST API, is too simple.
 
-Normally I would go Flask or Django RESTframework but will go even simpler with `bottle`.
+Normally I would go Flask or Django RESTframework but will go even simpler
+with `bottle`.
 
-JSON si really popular on REST APIS but is just a convetion, is not really needed, this API si not JSON, just plain strings. Numbers can be separated by commas to be lists.
+JSON si really popular on REST APIS but is just a convetion, is not really
+needed, this API si not JSON, just plain strings. Numbers can be separated by
+commas to be lists.
 
-To avoid a collisions used a hash based on timestamp + source ip + source port + some randomness. Hash function selected djb2, not becuase the best just becuse  DJB is awesome and always deserve credit.
+To avoid a collisions used a hash based on timestamp + source ip + source
+port + some randomness. Hash function selected djb2, not becuase the best just
+becuse DJB is awesome and always deserve credit.
 
-The implementation has a dual way to operate with standard python shared memory or Redis. Locks also suport both backends.
+The implementation has a dual way to operate with standard python shared
+memory or Redis. Locks also suport both backends.
 
-Let's imagine an entity which is 'number list' so tryied to understand verbs from https://www.rfc-editor.org/rfc/rfc9110.html and use them properly on it.
+Let's imagine an entity which is 'number list' so tryied to understand verbs
+from https://www.rfc-editor.org/rfc/rfc9110.html and use them properly on it.
 
 
 ## Observations
 
-Table run and generated with MiniMax M3.1 OpenCode when asked to compare sac-restad with sac-sock-mon
+Table run and generated with MiniMax M3.1 OpenCode when asked to compare
+sac-restad with sac-sock-mon
 
 |                             | socket `sac-sock-calc` | REST bottle (1 process) | REST gunicorn 4w + redis  |
 |-----------------------------|------------------------|-------------------------|---------------------------|
@@ -148,28 +165,45 @@ Table run and generated with MiniMax M3.1 OpenCode when asked to compare sac-res
 | server's own clock (avg/p95)| 0.53 / 1.91 ms         | 0.42 / 0.70 ms          | 0.65 / 1.00 ms            |
 | bytes sent / received       | 127 249 / 27 658       | 455 803 / 871 245       | 427 158 / 777 238         |
 
-I have to confess that I'm not double checking it to arrive on the delivery deadline.
+I have to confess that I'm not double checking it to arrive on the delivery
+deadline.
 
 Seeing that result I would say:
 
-- Even sac-sock-mon have less layers it was poorly implemented and optimized so gnuigorn is a way faster even having a way more layers.
-- There are no significant diferences between single python process and multiprocess with gunicorn problably the bottleneck is the benchmark client itself.
-- Redis and gunicorn seem to increase reasponse time. More layers more ms, but not crazy at all. With bigger requests wont be noticable.
+- Even sac-sock-mon have less layers it was poorly implemented and optimized
+so gnuigorn is a way faster even having a way more layers.
+- There are no significant diferences between single python process and
+multiprocess with gunicorn problably the bottleneck is the benchmark client itself.
+- Redis and gunicorn seem to increase reasponse time. More layers more ms,
+but not crazy at all. With bigger requests wont be noticable.
 
 ## AI usage
 
-None of the text intended to be read by a human has been generated or processed by any AI tool, whereas most of the texts (code) intended to be processed by a machine have been generated by AI Agents (OpenCode)
+None of the text intended to be read by a human has been generated or processed
+by any AI tool, whereas most of the texts (code) intended to be processed by a
+machine have been generated by AI Agents (OpenCode)
 
-Nowadays it is extremely easy to produce tons of text. I could ask OpenCode to write this file and look amazing, but I've tried to keep the assignment within its bounds to just show the ability to use sockets and put some thought into using them.
+Nowadays it is extremely easy to produce tons of text. I could ask OpenCode to
+write this file and look amazing, but I've tried to keep the assignment within
+its bounds to just show the ability to use sockets and put some thought into
+using them.
 
-AI tools have been used to check spelling and grammar but never to be copy-pasted: instead, the mistakes are understood and edited manually in the original text.
+AI tools have been used to check spelling and grammar but never to be
+copy-pasted: instead, the mistakes are understood and edited manually in the
+original text.
 
 This approach is to avoid being a [meat proxy](https://gruhn.me/blog/2026-08-03/).
 
 - gemini-3.1-pro (web): Translate <assignment title> to English
-- gemini-3.1-pro (web): Many lookups of information about python libraries and REST concepts
+- gemini-3.1-pro (web): Many lookups of information about python libraries
+and REST concepts
 - gemini-3.1-pro (web): Implement djb2 hash function
-- MiniMax-M3.1-flash (opencode): Develop restad-client, restad-test, restad-bench & restadapi.py
-- MiniMax-M3.1-flash (opencode): Run benchmark to compare sac-sock-calc and sac-restad
-- MiniMax-M3.1-flash (opencode): Can you check spell and grammar of README.md. Suggest the minimal changes keeping the style.
-- MiniMax-M3.1-flash (opencode): Can you check spell and grammar of the comments of (not code) of restad-server. Suggest the minimal changes keeping the style.
+- MiniMax-M3.1-flash (opencode): Develop restad-client, restad-test,
+restad-bench & restadapi.py
+- MiniMax-M3.1-flash (opencode): Run benchmark to compare sac-sock-calc
+and sac-restad
+- MiniMax-M3.1-flash (opencode): Can you check spell and grammar of README.md.
+Suggest the minimal changes keeping the style.
+- MiniMax-M3.1-flash (opencode): Can you check spell and grammar of the
+comments of (not code) of restad-server. Suggest the minimal changes keeping
+the style.
