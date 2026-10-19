@@ -136,7 +136,7 @@ def parse_operands():
     try:
         raw_data = request.body.read().decode('utf-8')
     except UnicodeDecodeError as exc:
-        prased['status'] = 400
+        parsed['status'] = 400
         parsed['error'] = str(exc)
         return parsed
 
@@ -218,8 +218,8 @@ def create(calc_id=None):
     store_session(calc_id, parsed['data'])
 
     response.status = 201
-    base_url = request.url.strip('/')
-    response.set_header('Location', f'{base_url}/{calc_id}')
+    scheme, host = request.urlparts[0], request.urlparts[1]
+    response.set_header('Location', f'{scheme}://{host}/calc/{calc_id}')
 
     return str(calc_id)
 
@@ -289,7 +289,7 @@ def calculate(calc_id, operation):
     if operation == 'reset':
         store_session(calc_id, [])
         response.status = 200
-        return 'resetled'
+        return 'resetted'
 
     if operation not in operations.keys():
         response.status = 409
@@ -297,7 +297,7 @@ def calculate(calc_id, operation):
 
     try:
         result = operations[operation](operands)
-    except (ArithmeticError, StatisticsError, TypeError) as exc:
+    except (ArithmeticError, StatisticsError, TypeError, ValueError) as exc:
         response.status = 422
         return f"Error: {exc}"
 
