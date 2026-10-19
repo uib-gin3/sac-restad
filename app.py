@@ -226,15 +226,20 @@ def calculate(calc_id, operation):
     "   3
     """
 
-    if operation not in operations.keys():
-        response.status = 409
-        return "Error: not a valid operation"
-
     try:
         operands = get_session(calc_id)
     except KeyError:
         response.status = 404
         return f'Error: calc {calc_id} does not exists'
+
+    if operation == 'reset':
+        store_session(calc_id, [])
+        response.status = 200
+        return 'resetled'
+
+    if operation not in operations.keys():
+        response.status = 409
+        return "Error: not a valid operation"
 
     try:
         result = operations[operation](operands)
