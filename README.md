@@ -4,7 +4,7 @@ Rest -> Application Programming Interface y Representational State Transfer
 Resta -> Substract in spanish
 Restad -> Plural of substract in spanish (imperative).
 
-In unix daemons finalize with a `d` so: we ask a bunch of unix processes running as a daemon to act as a REST API able to `restar`, so `restad` this numbers.
+Unix daemons finalize with a `d`: we ask a bunch of unix processes running as a daemon to act as a REST API able to `restar`, so unix processes `restad` this numbers.
 
 ## Abstract
 
@@ -61,7 +61,9 @@ If running without Redis containers can be avoided and used uv / uvx. Tested wit
 
 ### Benchmark
 
-    ./restard-bench -c 5 -r 10 -d 30
+   uv run ./restad-bench -c 5 -r 10 -d 30
+
+Without uv is also fine as restad-bench is all python stdlib.
 
 
 ## Server interface
@@ -125,6 +127,25 @@ Let's imagine an entity which is 'number list' so tryied to understand verbs fro
 
 
 ## Observations
+
+Table run and generated with MiniMax M3.1 OpenCode when asked to compare sac-restad with sac-sock-mon
+
+|                             | socket `sac-sock-calc` | REST bottle (1 process) | REST gunicorn 4w + redis  |
+|-----------------------------|------------------------|-------------------------|---------------------------|
+| offered load                | 50 req/s               | 50 ops/s (150 req/s)    | 50 ops/s (150 req/s)      |
+| served                      | 1313 req (43.7 req/s)  | 1475 ops / 4425 req     | 1373 ops / 4119 req       |
+| throughput                  | 43.7 req/s             | 49.2 ops/s (147.5 req/s)| 45.8 ops/s (137.3 req/s)  |
+| errors                      | 0                      | 0                       | 0                         |
+| TCP connections             | 5 (one per client)     | 4425 (one per request)  | 4119 (one per request)    |
+| response time p50           | 4.30 ms                | 1.67 ms                 | 2.35 ms                   |
+| response time p95           | 44.91 ms               | 2.54 ms                 | 3.26 ms                   |
+| response time p99           | 47.63 ms               | 3.24 ms                 | 3.63 ms                   |
+| response time max           | 50.36 ms               | 4.56 ms                 | 7.10 ms                   |
+| server's own clock (avg/p95)| 0.53 / 1.91 ms         | 0.42 / 0.70 ms          | 0.65 / 1.00 ms            |
+| bytes sent / received       | 127 249 / 27 658       | 455 803 / 871 245       | 427 158 / 777 238         |
+
+I have to confess that I'm not double checking it to arrive on the delivery deadline.
+
 
 ## AI usage
 
