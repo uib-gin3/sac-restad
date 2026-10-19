@@ -1,24 +1,24 @@
 # restad REST Daemon that knows how to "restar"
 
-- Rest -> Application Programming Interface y Representational State Transfer
-- Resta -> Substract in spanish
-- Restad -> Plural of substract in spanish (imperative).
+- Rest -> Application Programming Interface & Representational State Transfer
+- Resta -> Subtract in Spanish
+- Restad -> Plural of subtract in Spanish (imperative).
 
-Unix daemons finalize with a `d`: we ask a bunch of unix processes running as
-a daemon to act as a REST API able to `restar`, so unix processes `restad` this
-numbers.
+Unix daemons finalize with a `d`: we ask a bunch of Unix processes running as
+a daemon to act as a REST API able to `restar`, so Unix processes `restad`
+these numbers.
 
 
 ## Abstract
 
 A simple REST API implemented with Python + Bottle to implement a basic
-calculator. Restad can run by itself as a single python process, multiprocess
-with gunicorn and opionally use Redis as backend when deployed in different
+calculator. Restad can run by itself as a single Python process, multiprocess
+with Gunicorn and optionally use Redis as a backend when deployed in different
 containers / servers.
 
-The development has been done following KISS (Keep it Simple Stupid) and UNIX
-philosophy (do one thing and do it well). As Redis already needed a container
-a Dockerfile and docker-compose.yml has been added as well.
+The development has been done following KISS (Keep It Simple, Stupid) and UNIX
+philosophy (do one thing and do it well). As Redis already needed a container,
+a Dockerfile and docker-compose.yml have been added as well.
 
 
 ## Assignment
@@ -38,11 +38,12 @@ accessible) repository containing the source code and the relevant descriptions.
 
 ## Setup
 
-This project has been tested on Debian 13 and docker 29.9.0 with the compose plugin.
+This project has been tested on Debian 13 and Docker 29.9.0 with the compose plugin.
 
-It should just be needed bash, docker and docker compose.
+It should just need bash, Docker and Docker Compose.
 
-If running without Redis containers can be avoided and used uv / uvx. Tested with 0.11.8.
+If running without Redis, containers can be avoided and uv / uvx used. Tested
+with 0.11.8.
 
 
 ## Usage example
@@ -55,11 +56,11 @@ If running without Redis containers can be avoided and used uv / uvx. Tested wit
     alias PATCH="uvx --from httpie http PATCH"
     alias DELETE="uvx --from httpie http DELETE"
 
-### Run simple way: single process no redis
+### Run simple way: single process no Redis
 
     uv run --with bottle==0.13.4 python app.py
 
-### Production mode: multiprocess with gunicorn + redis
+### Production mode: multiprocess with Gunicorn + Redis
 
     docker compose up
 
@@ -75,12 +76,13 @@ If running without Redis containers can be avoided and used uv / uvx. Tested wit
    uv run ./restad-bench -c 5 -r 10 -d 30
 
 
-Without uv is also fine as restad-bench is all python stdlib.
+Without uv it is also fine, as restad-bench is all Python stdlib.
 
 
 ## Server interface
 
-Tried to follow HTTP Verb sematincs https://www.rfc-editor.org/rfc/rfc9110.html
+Tried to follow HTTP Verb semantics:
+https://www.rfc-editor.org/rfc/rfc9110.html
 
 Create a calculus with POST, you can send the first list of numbers in the payload:
 
@@ -97,17 +99,18 @@ Numbers can be added with PATCH
     # <some-id> will contain the list 3,4,5,6,7,8,9
 
 
-You alse can can GET the result (without modifing the calc) appending an operation
+You also can GET the result (without modifying the calc), appending an operation
 
     GET localhost:12345/calc/my-calc/add
     # Will respond 42
 
-You can also GET the content without an operation, it just responds the number list.
+You can also GET the content without an operation, it just responds with the
+number list.
 
     GET localhost:12345/calc/my-calc
     # Will respond 3,4,5,6,7,8,9
 
-We can get the result as well POSTing it into a consolidated result:
+You can also get the result POSTing it into a consolidated result:
 
     POST localhost:12345/calc/my-calc/add
     # Will respond 42
@@ -126,32 +129,32 @@ Finally you can DELETE the calc when no longer needed.
 
 ## Design decisions
 
-No versioning for the REST API, is too simple.
+No versioning for the REST API, it is too simple.
 
-Normally I would go Flask or Django RESTframework but will go even simpler
-with `bottle`.
+Normally I would go Flask or Django REST framework but I will go even simpler
+with Bottle.
 
-JSON si really popular on REST APIS but is just a convetion, is not really
-needed, this API si not JSON, just plain strings. Numbers can be separated by
+JSON is really popular in REST APIs but is just a convention, is not really
+needed, this API is not JSON, just plain strings. Numbers can be separated by
 commas to be lists.
 
-To avoid a collisions used a hash based on timestamp + source ip + source
-port + some randomness. Hash function selected djb2, not becuase the best just
-becuse DJB is awesome and always deserve credit.
+To avoid collisions I used a hash based on timestamp + source IP + source
+port + some randomness. Hash function selected: djb2, not because the best just
+because DJB is awesome and always deserves credit.
 
-The implementation has a dual way to operate with standard python shared
-memory or Redis. Locks also suport both backends.
+The implementation has a dual way to operate: with standard Python shared
+memory or Redis. Locks also support both backends.
 
-Let's imagine an entity which is 'number list' so tryied to understand verbs
+Let's imagine an entity which is 'number list' so tried to understand verbs
 from https://www.rfc-editor.org/rfc/rfc9110.html and use them properly on it.
 
 
 ## Observations
 
 Table run and generated with MiniMax M3.1 OpenCode when asked to compare
-sac-restad with sac-sock-mon
+sac-restad with sac-sock-calc
 
-|                             | socket `sac-sock-calc` | REST bottle (1 process) | REST gunicorn 4w + redis  |
+|                             | socket `sac-sock-calc` | REST Bottle (1 process) | REST Gunicorn 4w + Redis  |
 |-----------------------------|------------------------|-------------------------|---------------------------|
 | offered load                | 50 req/s               | 50 ops/s (150 req/s)    | 50 ops/s (150 req/s)      |
 | served                      | 1313 req (43.7 req/s)  | 1475 ops / 4425 req     | 1373 ops / 4119 req       |
@@ -170,32 +173,32 @@ deadline.
 
 Seeing that result I would say:
 
-- Even sac-sock-mon have less layers it was poorly implemented and optimized
-so gnuigorn is a way faster even having a way more layers.
-- There are no significant diferences between single python process and
-multiprocess with gunicorn problably the bottleneck is the benchmark client itself.
-- Redis and gunicorn seem to increase reasponse time. More layers more ms,
-but not crazy at all. With bigger requests wont be noticable.
+- Even sac-sock-calc has fewer layers it was poorly implemented and optimized
+so gunicorn is way faster even having way more layers.
+- There are no significant differences between single Python process and
+multiprocess with Gunicorn probably the bottleneck is the benchmark client
+itself.
+- Redis and Gunicorn seem to increase response time. More layers more ms,
+but not crazy at all. With bigger requests won't be noticeable.
 
 ## AI usage
 
-None of the text intended to be read by a human has been generated or processed
-by any AI tool, whereas most of the texts (code) intended to be processed by a
-machine have been generated by AI Agents (OpenCode)
+None of the text intended to be read by a human has been generated by an AI
+tool, whereas most of the texts (code) intended to be processed by a
+machine have been generated by AI Agents (OpenCode).
 
 Nowadays it is extremely easy to produce tons of text. I could ask OpenCode to
 write this file and look amazing, but I've tried to keep the assignment within
-its bounds to just show the ability to use sockets and put some thought into
-using them.
+its bounds to just show the ability to develop a REST API and put some thought
+into it.
 
-AI tools have been used to check spelling and grammar but never to be
-copy-pasted: instead, the mistakes are understood and edited manually in the
-original text.
+AI tools have been used to check spelling and grammar, you can see original text on
+second-to-last commit. Also few final manual edits were done.
 
 This approach is to avoid being a [meat proxy](https://gruhn.me/blog/2026-08-03/).
 
 - gemini-3.1-pro (web): Translate <assignment title> to English
-- gemini-3.1-pro (web): Many lookups of information about python libraries
+- gemini-3.1-pro (web): Many lookups of information about Python libraries
 and REST concepts
 - gemini-3.1-pro (web): Implement djb2 hash function
 - MiniMax-M3.1-flash (opencode): Develop restad-client, restad-test,

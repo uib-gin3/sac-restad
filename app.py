@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-# Except for djb2_hex, the regex and acquire_lock (AI generated) all the code
-# in this file has been implemented oldschool way by hand, just using AI tools
+# Except for djb2_hex, the regex and acquire_lock (AI generated), all the code
+# in this file has been implemented old school way by hand, just using AI tools
 # as a search assistant.
 
 import re
@@ -61,10 +61,10 @@ else:
 
 def store_session(session, value):
     """
-    " Stores session value
-    " If external is false it assumed that a single process is doing
+    " Stores the session value
+    " If USE_REDIS is false it is assumed that a single process is doing
     " the work so just a shared dict is fine.
-    " If shared is true we use an external shared memory across
+    " If USE_REDIS is true we use an external shared memory across
     " all processes.
     """
 
@@ -96,7 +96,7 @@ def delete_session(session):
 ######################### Some aux functions ###################################
 
 def djb2_hex(text):
-    """ Simple hash function given a text return hex hash.
+    """ Simple hash function given a text returns the hex hash.
     " Daniel J. Bernstein is just awesome, just a tribute <3
     " http://www.cse.yorku.ca/~oz/hash.html
     """
@@ -113,7 +113,7 @@ def djb2_hex(text):
 def generate_id():
     """
     " Given a request returns a session_id
-    " Hashing some connection elements + random to avoid colisions.
+    " Hashing some connection elements + random to avoid collisions.
     """
     timestamp = str(time.time())
     client_ip = request.environ.get('REMOTE_ADDR', '')
@@ -125,11 +125,11 @@ def generate_id():
 
 def parse_operands():
     """
-    " Extract and parse the operands from request body
+    " Extract and parse the operands from the request body
     " @return a dict with:
     "   data -> with the list of operands (if no error)
     "   status -> with the status code to be given if error
-    "   error -> with the error Message
+    "   error -> with the error message
     """
     parsed = {}
 
@@ -140,7 +140,7 @@ def parse_operands():
         parsed['error'] = str(exc)
         return parsed
 
-    # Thanks AI for writting such a good regex :D (hope it has no bugs)
+    # Thanks AI for writing such a good regex :D (hope it has no bugs)
     pattern = r'^[-+]?(?:\d+\.?\d*|\.\d+)(?:,[-+]?(?:\d+\.?\d*|\.\d+))*$'
     if not re.match(pattern, raw_data):
         parsed['status'] = 400
@@ -156,8 +156,8 @@ def parse_operands():
 app = Bottle()
 
 
-# Operations are not important, we want to focus on the 
-# API side so: lets be compact and hacky, which is fun yet not convinient
+# Operations are not important, we want to focus on the
+# API side so: let's be compact and hacky, which is fun yet not convenient
 # on real projects.
 operations = {
     "add": lambda operands: reduce(operator.add, operands),
@@ -197,13 +197,13 @@ def set_final_headers():
 @app.put("/calc/<calc_id>")
 def create(calc_id=None):
     """
-    " Create a new calculus adding the payload of comma separaed numbers
-    " (if given). Will return the calc-id to use in futher requests.
+    " Create a new calculus adding the payload of comma separated numbers
+    " (if given). Will return the calc-id to use in further requests.
     "
-    "   /calculate
+    "   /calc
     "   body: 1,2
     "
-    "   200 OK
+    "   201 Created
     "   3db3123f21314
     """
 
@@ -227,8 +227,8 @@ def create(calc_id=None):
 @app.patch("/calc/<calc_id>")
 def update(calc_id):
     """
-    " Add operands to an existng calculus as a list of comma separaed numbers.
-    " Will return the current amount of operands.
+    " Add operands to an existing calculus as a list of comma separated numbers.
+    " Will return the current number of operands.
     "
     "   /calc/<calc_id>
     "   body: 3,4
@@ -248,7 +248,7 @@ def update(calc_id):
             operands = get_session(calc_id)
         except KeyError:
             response.status = 404
-            return f'Error: calc {calc_id} does not exists'
+            return f'Error: calc {calc_id} does not exist'
 
         operands.extend(parsed['data'])
         store_session(calc_id, operands)
@@ -264,7 +264,7 @@ def get(calc_id):
         data = get_session(calc_id)
     except KeyError:
         response.status = 404
-        return f'Error: calc {calc_id} does not exists'
+        return f'Error: calc {calc_id} does not exist'
 
     return ",".join([str(x) for x in data]) 
 
@@ -272,8 +272,8 @@ def get(calc_id):
 @app.route("/calc/<calc_id>/<operation>", method=['GET', 'POST'])
 def calculate(calc_id, operation):
     """
-    " Returns the desired operatin applied to the stored operand list
-    " Does not modifyies the list (PUT would)
+    " Returns the desired operation applied to the stored operand list
+    " GET does not modify the list POST does.
     "   /calc/31f6266f/add
     "
     "   200 OK
@@ -284,7 +284,7 @@ def calculate(calc_id, operation):
         operands = get_session(calc_id)
     except KeyError:
         response.status = 404
-        return f'Error: calc {calc_id} does not exists'
+        return f'Error: calc {calc_id} does not exist'
 
     if operation == 'reset':
         store_session(calc_id, [])
@@ -316,7 +316,7 @@ def delete(calc_id):
         data = get_session(calc_id)
     except KeyError:
         response.status = 404
-        return f'Error: calc {calc_id} does not exists'
+        return f'Error: calc {calc_id} does not exist'
     
     delete_session(calc_id)
 
