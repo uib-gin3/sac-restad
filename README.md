@@ -2,10 +2,9 @@
 
 Rest -> Application Programming Interface y Representational State Transfer
 Resta -> Substract in spanish
-Restad -> Plural of substract in spanish (imperative). If we consider the aplication restad a group of procesces able to substract.
-In unix daemons finalize with a `d` so: restad is a REST API able to `restar` amoung others operations Daemon 
+Restad -> Plural of substract in spanish (imperative).
 
-Please set of threads 'restad' this numbers.
+In unix daemons finalize with a `d` so: we ask a bunch of unix processes running as a daemon to act as a REST API able to `restar`, so `restad` this numbers.
 
 ## Abstract
 
@@ -61,7 +60,7 @@ You can also create a calcules by PUTing all the content into the one you define
 
 Numbers can be added with PATCH
 
-    PATCH localhost:12345/calc/<calc-id> --raw 7,8,9
+    PATCH localhost:12345/calc/my-calc --raw 7,8,9
     # <some-id> will contain the list 3,4,5,6,7,8,9
 
 You can GET the content without an operation just responds the number list.
@@ -71,23 +70,23 @@ You can GET the content without an operation just responds the number list.
 
 You alse can can GET the result (without modifing the calcc) appending an operation
 
-    GET localhost:12345/calc/<calc-id>/add
+    GET localhost:12345/calc/my-calc/add
     # Will respond the meaning of life (42)
 
 We can get the result as well as POSTing it into a consolidated result:
 
-    POST localhost:12345/calc/<calc-id>/add
+    POST localhost:12345/calc/my-calc/add
     # Will respond 42
 
-    GET localhost:12345/calc/<calc-id>
+    GET localhost:12345/calc/my-calc
     # Will respond 42
 
 Finally we can DELETE the operation when no longer needed.
 
-    DELETE localhost:12345/calc/<calc-id>
+    DELETE localhost:12345/calc/my-calc
     # Will delete it
 
-    GET localhost:12345/calc/<calc-id>
+    GET localhost:12345/calc/my-calc
     # Will respond 404
 
 
