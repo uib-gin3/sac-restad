@@ -334,7 +334,7 @@ def delegate(peers):
     """ Forward the request to a colleague and relay its answer.
 
     " The colleague is picked with the current algorithm, its answer is
-    " relayed together with its X-Served-By header, and how it went is
+    " relayed together with its X-Calculated-By header, and how it went is
     " recorded in Redis. On failure the leader retries with a different
     " colleague, up to STRIKE_RETRY times.
     """
@@ -380,9 +380,9 @@ def delegate(peers):
         mem_incr('strike:delegated')
 
         response.status = raw.status
-        response.set_header('X-Served-By',
-                            raw.getheader('X-Served-By') or node_key(endpoint))
-        response.set_header('X-Leaded-By', HOSTNAME)
+        response.set_header('X-Calculated-By',
+                            raw.getheader('X-Calculated-By') or node_key(endpoint))
+        response.set_header('X-Lead-By', HOSTNAME)
 
         # The API promises a Location header on creates; the colleague
         # wrote it with its own host, rewrite it with ours.
@@ -444,7 +444,7 @@ def distributed(func):
         # request is computed here: bouncing it back would be a
         # ping-pong with whoever delegated it.
         if request.get_header('X-Delegated-By') is not None:
-            response.set_header('X-Leaded-By', HOSTNAME)
+            response.set_header('X-Lead-By', HOSTNAME)
             return func(*args, **kwargs)
 
         members = workforce()
@@ -465,7 +465,7 @@ def distributed(func):
         code = status_code()
         record_node(HOSTNAME, time.monotonic() - started,
                     ok=code != 418 and code < 500)
-        response.set_header('X-Leaded-By', HOSTNAME)
+        response.set_header('X-Lead-By', HOSTNAME)
         return result
 
     return wrapper
@@ -648,8 +648,8 @@ def set_final_headers():
 
     # The node that computed the operation signs it. When the leader
     # delegated, it already relayed the colleague's signature.
-    if not response.get_header('X-Served-By'):
-        response.set_header('X-Served-By', HOSTNAME)
+    if not response.get_header('X-Calculated-By'):
+        response.set_header('X-Calculated-By', HOSTNAME)
 
 
 # POST creates and generates id

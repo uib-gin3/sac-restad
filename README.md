@@ -103,8 +103,8 @@ variables; without them restad behaves exactly as described above.
 
 ### New headers
 
-    X-Served-By: node2   the hostname of the node that computed
-    X-Leaded-By: node1   the leader that orchestrated (when there was one)
+    X-Calculated-By: node2   the hostname of the node that computed
+    X-Lead-By: node1         the leader that orchestrated (when there was one)
 
 ### Environment variables
 
