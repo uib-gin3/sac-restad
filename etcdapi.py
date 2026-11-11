@@ -31,6 +31,19 @@ def _decode(raw):
     return base64.b64decode(raw).decode('utf-8')
 
 
+def _range_end(prefix):
+    """ etcd ranges are [key, range_end): to select every key under a
+    " prefix, range_end is the prefix with its last byte incremented.
+    """
+
+    raw = bytearray(prefix.encode('utf-8'))
+    for index in range(len(raw) - 1, -1, -1):
+        if raw[index] < 0xff:
+            raw[index] += 1
+            return bytes(raw[:index + 1]).decode('utf-8')
+    raise EtcdError(f"no range_end possible for {prefix!r}")
+
+
 class Etcd:
     """ A very small etcd v3 client (JSON gateway only). """
 
@@ -64,6 +77,20 @@ class Etcd:
         answer = self._post('/v3/kv/range', {'key': _encode(key)})
         kvs = answer.get('kvs') or []
         return _decode(kvs[0]['value']) if kvs else None
+
+    def prefix(self, prefix):
+        """ Every key/value pair under a prefix, as a dict.
+
+        " This is how the workforce is read: one range for the whole
+        " strike/workforce/ prefix.
+        """
+
+        answer = self._post('/v3/kv/range', {
+            'key': _encode(prefix),
+            'range_end': _encode(_range_end(prefix)),
+        })
+        return {_decode(kv['key']): _decode(kv['value'])
+                for kv in answer.get('kvs') or []}
 
     def put(self, key, value, ttl=None):
         """ Put a key, attached to a fresh lease when a TTL is given. """

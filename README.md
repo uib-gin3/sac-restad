@@ -81,7 +81,7 @@ Without uv it is also fine, as restad-bench is all Python stdlib.
 
 ## The strike mode (sac-strike)
 
-restad doubles as the calculator fleet of the
+restad doubles as the calculator workforce of the
 [sac-strike](https://github.com/uib-gin3/sac-strike) assignment ("The
 calculators' strike"): a leader elected through etcd delegates operations
 to its colleagues, nodes can go on strike and every leader lives on a
@@ -108,15 +108,13 @@ variables; without them restad behaves exactly as described above.
 
 ### Environment variables
 
-    STRIKE_ETCD                 host[:port] of etcd; together with
-                                STRIKE_COLLEAGUES it activates the
-                                distributed mode
-    STRIKE_COLLEAGUES           comma separated http endpoints of the
-                                fleet, the same list for everybody
-                                (themselves included)
+    STRIKE_ETCD                 host[:port] of etcd; it alone activates
+                                the distributed mode
+    STRIKE_PORT                 the port this node serves on, for its
+                                workforce registration (12345)
     STRIKE_LEADING_OVERHEAD     the leader computes itself with
                                 probability 1/N - (1/N * overhead),
-                                N being the number of instances
+                                N being the size of the workforce
     STRIKE_ALGORITHM            random (default), robust (delegate to
                                 the colleague with the fewest failures)
                                 or fastest (lowest average response
@@ -126,7 +124,8 @@ variables; without them restad behaves exactly as described above.
     STRIKE_BURNOUT_MIN_TIME     burnout countdown, minimum (8s)
     STRIKE_BURNOUT_MAX_TIME     burnout countdown, maximum (20s)
     STRIKE_RETRY                delegation attempts before giving up (5)
-    STRIKE_LEADER_TTL           lease of the etcd leader key (4s)
+    STRIKE_TTL                  lease of the etcd leader and workforce
+                                keys (4s)
     STRIKE_TIMEOUT              timeout of a delegated request (5s)
 
 ### Metrics in redis
@@ -150,11 +149,27 @@ deployment is now a single threaded worker (`--workers 1 --threads 8`)
 instead of four sync workers. Same API, the state just does not need to
 be synchronised between processes.
 
-The election itself is a single etcd key (`strike/leader`) with a lease:
-a healthy node claims it when it is free and renews it while it leads; a
-struck or burned out leader deletes it and steps down, and if a leader
-dies the lease expires and the next node that sees the key empty claims
-it.
+There is no background loop: the requests themselves drive everything.
+Two etcd key families hold the whole shared state, both with leases:
+
+    strike/workforce/<hostname>   the http endpoint of each node
+    strike/leader                 the hostname of the leader
+
+Every request re-asserts its node's workforce membership (throttled to
+about twice per TTL) and asks etcd who leads. A leaderless workforce
+elects a leader on the next request with a compare-and-swap; the leader
+renews its lease while requests come; a struck or burned out leader
+deletes the key and steps down the moment a request finds it; and if a
+leader simply dies, the lease expires and the next request elects
+somebody else. The burnout countdown is evaluated the same way, so it
+fires on the first request after it expires. An idle fleet has no leader
+and lets memberships lapse; the first request that shows up starts
+everything again, and while users are being served there is (almost)
+always a leader.
+
+When etcd is unreachable a node behaves as a follower and always serves
+locally; the workforce list falls back to the last known one. No etcd
+hiccup ever breaks a calculation.
 
 
 ## Server interface

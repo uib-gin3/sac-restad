@@ -4,9 +4,9 @@
 # in this file has been implemented old school way by hand, just using AI tools
 # as a search assistant.
 #
-# The strike mode section (etcd leader election, delegation to colleagues,
-# strikes and burnouts) has been implemented with GLM-5.3-Flash on OpenCode
-# for the sac-strike assignment.
+# The strike mode section (etcd leader election, delegation to the
+# workforce, strikes and burnouts, all of it request-driven) has been
+# implemented with GLM-5.3-Flash on OpenCode for the sac-strike assignment.
 
 import re
 import os
@@ -163,16 +163,18 @@ def parse_operands():
 ######################### Strike mode #########################################
 #
 # The calculators' strike: a leader elected through etcd, delegation to
-# colleagues, strikes and burnouts. All of it is switched on by the
-# STRIKE_ environment variables, without them the calculator below
-# behaves exactly as it always did.
+# the workforce, strikes and burnouts. All of it is switched on by the
+# STRIKE_ environment variables and, fittingly for a strike, there is
+# no management: the requests themselves drive the membership, the
+# elections, the renewals and the step downs. Without the variables the
+# calculator below behaves exactly as it always did.
 
 HOSTNAME = socket.gethostname()
 
-STRIKE_ETCD = os.environ.get('STRIKE_ETCD', '')               # host[:port]
-STRIKE_COLLEAGUES = os.environ.get('STRIKE_COLLEAGUES', '')   # http endpoints
-DISTRIBUTED = bool(STRIKE_ETCD) and bool(STRIKE_COLLEAGUES)
+STRIKE_ETCD = os.environ.get('STRIKE_ETCD', '')     # host[:port], activates all
+DISTRIBUTED = bool(STRIKE_ETCD)
 
+STRIKE_PORT = int(os.environ.get('STRIKE_PORT', 12345))
 STRIKE_ALGORITHM = os.environ.get('STRIKE_ALGORITHM', 'random').lower()
 STRIKE_LEADING_OVERHEAD = float(os.environ.get('STRIKE_LEADING_OVERHEAD', 0.1))
 STRIKE_MIN_TIME = float(os.environ.get('STRIKE_MIN_TIME', 2.0))
@@ -180,62 +182,54 @@ STRIKE_MAX_TIME = float(os.environ.get('STRIKE_MAX_TIME', 6.0))
 STRIKE_BURNOUT_MIN_TIME = float(os.environ.get('STRIKE_BURNOUT_MIN_TIME', 8.0))
 STRIKE_BURNOUT_MAX_TIME = float(os.environ.get('STRIKE_BURNOUT_MAX_TIME', 20.0))
 STRIKE_RETRY = int(os.environ.get('STRIKE_RETRY', 5))
-STRIKE_LEADER_TTL = int(os.environ.get('STRIKE_LEADER_TTL', 4))
+STRIKE_TTL = int(os.environ.get('STRIKE_TTL', 4))
 STRIKE_TIMEOUT = float(os.environ.get('STRIKE_TIMEOUT', 5.0))
 
-COLLEAGUES = [c.strip().rstrip('/') for c in STRIKE_COLLEAGUES.split(',')
-              if c.strip()]
-# Every node gets the same list (itself included) and excludes itself
-# when delegating, matching endpoints by hostname.
-SELF = next((c for c in COLLEAGUES if urlsplit(c).hostname == HOSTNAME), None)
-PEERS = [c for c in COLLEAGUES if c != SELF]
-
+WORKFORCE_PREFIX = 'strike/workforce/'
 LEADER_KEY = 'strike/leader'
-LEADER_TICK = 0.5      # seconds between two campaign ticks
+RENEW_EVERY = STRIKE_TTL / 3.0    # renew a lease when it is this old
 
-# All the strike state lives in the process memory: only the deadlines
-# matter (time.time() based) and everything else is derived from them.
+SELF_ENDPOINT = f"http://{HOSTNAME}:{STRIKE_PORT}"
+
+# etcd holds the truth: who leads and who is in the workforce. The only
+# local state is this node's own deadlines, time.time() based, plus a
+# fallback copy of the workforce for when etcd does not answer.
 STATE = {
     'strike_until': 0.0,    # answering 418 to the calculations
     'burnout_at': 0.0,      # deadline of the auto-destruction countdown
     'burnout_until': 0.0,   # 418 window after the countdown fires
-    'leader': None,         # leader hostname as seen in etcd
-    'am_leader': False,
+    'registered_at': 0.0,   # last workforce membership renewal
+    'renewed_at': 0.0,      # last leadership lease renewal
     'unhealthy': False,     # to notice and log the recoveries
+    'workforce': {},        # last known workforce
 }
 LOCK = threading.Lock()
 
 if DISTRIBUTED:
     from etcdapi import Etcd, EtcdError
 
-
-def on_strike():
-    with LOCK:
-        return time.time() < STATE['strike_until']
+    _host, _, _port = STRIKE_ETCD.partition(':')
+    etcd = Etcd(_host, int(_port or 2379))
 
 
-def burned_out():
-    with LOCK:
-        return time.time() < STATE['burnout_until']
+def _safe_etcd(action):
+    """ etcd hiccups must never take a calculation down. """
+    try:
+        return action()
+    except (EtcdError, OSError):
+        return None
 
 
-def am_leader():
-    with LOCK:
-        return STATE['am_leader']
-
-
-def self_probability():
+def self_probability(members):
     """ Probability of the leader doing the operation itself.
 
-    " 1/N - (1/N * STRIKE_LEADING_OVERHEAD), N being the number of
-    " instances of the fleet. With 5 instances and an overhead of 0.1:
+    " 1/N - (1/N * STRIKE_LEADING_OVERHEAD), N being the size of the
+    " workforce. With 5 instances and an overhead of 0.1:
     " 1/5 - (1/5 * 0.1) = 0.18
     """
 
-    if not COLLEAGUES:
-        return 1.0
-
-    share = 1.0 / len(COLLEAGUES)
+    n = len(members) or 1
+    share = 1.0 / n
     return max(0.0, share - share * STRIKE_LEADING_OVERHEAD)
 
 
@@ -301,7 +295,7 @@ def log_event(kind, detail=''):
     _safe_redis(update)
 
 
-def choose_backend(exclude):
+def choose_backend(peers, exclude):
     """ Pick the next colleague to delegate to.
 
     " robust  -> the one with the fewest failures
@@ -310,15 +304,15 @@ def choose_backend(exclude):
     " Ties are broken randomly.
     """
 
-    peers = [peer for peer in PEERS if peer not in exclude]
-    if not peers:
+    candidates = [peer for peer in peers if peer not in exclude]
+    if not candidates:
         return None
 
     if STRIKE_ALGORITHM == 'random' or not USE_REDIS:
-        return random.choice(peers)
+        return random.choice(candidates)
 
     scored = []
-    for endpoint in peers:
+    for endpoint in candidates:
         node = node_key(endpoint)
         ok = int(_safe_redis(lambda node=node: mem.get(f"strike:ok:{node}")) or 0)
         fail = int(_safe_redis(lambda node=node: mem.get(f"strike:fail:{node}")) or 0)
@@ -331,10 +325,10 @@ def choose_backend(exclude):
     if STRIKE_ALGORITHM == 'fastest':
         return min(scored, key=lambda score: (score[2], score[1]))[0]
 
-    return random.choice(peers)
+    return random.choice(candidates)
 
 
-def delegate():
+def delegate(peers):
     """ Forward the request to a colleague and relay its answer.
 
     " The colleague is picked with the current algorithm, its answer is
@@ -356,7 +350,7 @@ def delegate():
 
     tried = set()
     for _ in range(max(1, STRIKE_RETRY)):
-        endpoint = choose_backend(tried)
+        endpoint = choose_backend(peers, tried)
         if endpoint is None:
             break
         tried.add(endpoint)
@@ -417,9 +411,10 @@ def distributed(func):
     " Struck or burned out nodes answer 418 I'm a teapot to every
     " calculation. Non-leader nodes always do the operation themselves.
     " The leader does it itself with probability
-    " 1/N - (1/N * STRIKE_LEADING_OVERHEAD) and delegates the rest,
-    " except when the request arrives already delegated (that would be
-    " a ping-pong between two nodes that both believe they lead).
+    " 1/N - (1/N * STRIKE_LEADING_OVERHEAD), N being the size of the
+    " workforce, and delegates the rest, except when the request
+    " arrives already delegated (that would be a ping-pong between two
+    " nodes that both believe they lead).
     """
 
     @functools.wraps(func)
@@ -440,108 +435,55 @@ def distributed(func):
         if not DISTRIBUTED:
             return func(*args, **kwargs)
 
-        if (am_leader()
-                and request.get_header('X-Delegated-By') is None
-                and random.random() >= self_probability()):
-            return delegate()
+        if request.environ.get('strike.leader') != HOSTNAME:
+            return func(*args, **kwargs)
 
-        if am_leader() and request.get_header('X-Delegated-By') is None:
-            mem_incr('strike:self')
-            started = time.monotonic()
-            try:
-                result = func(*args, **kwargs)
-            except Exception:
-                record_node(HOSTNAME, time.monotonic() - started, ok=False)
-                raise
-            code = status_code()
-            record_node(HOSTNAME, time.monotonic() - started,
-                        ok=code != 418 and code < 500)
-            return result
+        # The leader signs as the one leading. An already delegated
+        # request is computed here: bouncing it back would be a
+        # ping-pong with whoever delegated it.
+        if request.get_header('X-Delegated-By') is not None:
+            response.set_header('X-Leaded-By', HOSTNAME)
+            return func(*args, **kwargs)
 
-        return func(*args, **kwargs)
+        members = workforce()
+        peers = [endpoint for name, endpoint in sorted(members.items())
+                 if name != HOSTNAME]
+
+        if peers and random.random() >= self_probability(members):
+            return delegate(peers)
+
+        # Nobody to delegate to, or the dice said so: do it here.
+        mem_incr('strike:self')
+        started = time.monotonic()
+        try:
+            result = func(*args, **kwargs)
+        except Exception:
+            record_node(HOSTNAME, time.monotonic() - started, ok=False)
+            raise
+        code = status_code()
+        record_node(HOSTNAME, time.monotonic() - started,
+                    ok=code != 418 and code < 500)
+        response.set_header('X-Leaded-By', HOSTNAME)
+        return result
 
     return wrapper
 
 
-def tick(etcd):
-    """ One campaign tick: elect, renew or step down.
+def workforce():
+    """ The workforce as etcd sees it right now: {hostname: endpoint}.
 
-    " The whole election is a single etcd key with a lease. A healthy
-    " node claims it when it is free (put_if_absent) and renews it
-    " while it leads (put_if_value with a fresh lease). A struck or
-    " burned out leader deletes the key and steps down, and when a
-    " leader just dies the lease expires and the key goes away: the
-    " next tick somebody else claims it.
+    " Read fresh on every call, falling back to the last known one
+    " when etcd does not answer.
     """
 
-    now = time.time()
-    with LOCK:
-        strike = now < STATE['strike_until']
-        burnt = now < STATE['burnout_until']
-        burnout_due = STATE['am_leader'] and now >= STATE['burnout_at']
-        was_unhealthy = STATE['unhealthy']
-        STATE['unhealthy'] = strike or burnt
-    healthy = not (strike or burnt)
-
-    if was_unhealthy and healthy:
-        log_event('recovered')
-
-    if STATE['am_leader']:
-        if strike:
-            etcd.delete_if_value(LEADER_KEY, HOSTNAME)
-            log_event('stepped_down', 'on strike')
-            with LOCK:
-                STATE['am_leader'] = False
-                STATE['leader'] = None
-        elif burnout_due:
-            with LOCK:
-                STATE['burnout_until'] = now + random.uniform(STRIKE_MIN_TIME,
-                                                              STRIKE_MAX_TIME)
-            etcd.delete_if_value(LEADER_KEY, HOSTNAME)
-            log_event('burned_out', f"{STATE['burnout_until'] - now:.1f}s of teapot")
-            with LOCK:
-                STATE['am_leader'] = False
-                STATE['leader'] = None
-        elif not etcd.put_if_value(LEADER_KEY, HOSTNAME, HOSTNAME,
-                                   ttl=STRIKE_LEADER_TTL):
-            log_event('stepped_down', 'lost the leadership key')
-            with LOCK:
-                STATE['am_leader'] = False
-                STATE['leader'] = None
-        return
-
-    # Follower: claim the key when it is free and we are healthy.
-    if healthy and etcd.get(LEADER_KEY) is None:
-        if etcd.put_if_absent(LEADER_KEY, HOSTNAME, ttl=STRIKE_LEADER_TTL):
-            burnout_in = random.uniform(STRIKE_BURNOUT_MIN_TIME,
-                                        STRIKE_BURNOUT_MAX_TIME)
-            with LOCK:
-                STATE['am_leader'] = True
-                STATE['burnout_at'] = now + burnout_in
-                STATE['leader'] = HOSTNAME
-            log_event('elected', f"burnout in {burnout_in:.1f}s")
-            return
+    members = _safe_etcd(lambda: etcd.prefix(WORKFORCE_PREFIX))
+    if members is not None:
+        with LOCK:
+            STATE['workforce'] = members
+        return members
 
     with LOCK:
-        STATE['leader'] = etcd.get(LEADER_KEY)
-
-
-def campaign():
-    """ Background thread that keeps the leadership state fresh. """
-
-    host, _, port = STRIKE_ETCD.partition(':')
-    etcd = Etcd(host, int(port or 2379))
-
-    while True:
-        try:
-            tick(etcd)
-        except (EtcdError, OSError):
-            pass  # etcd unreachable: keep whatever we knew
-        time.sleep(LEADER_TICK)
-
-
-if DISTRIBUTED:
-    threading.Thread(target=campaign, name='campaign', daemon=True).start()
+        return dict(STATE['workforce'])
 
 
 ######################### The app itself ###################################
@@ -573,6 +515,101 @@ def set_default_headers():
     request.environ['REQUEST_START_TIME'] = time.time()
 
 
+@app.hook('before_request')
+def workforce_membership():
+    """
+    " Any request re-asserts this node's membership of the workforce:
+    " its endpoint, attached to a fresh lease. Throttled to about twice
+    " per TTL, so a busy node does not write etcd on every request and
+    " a quiet node lets its membership lapse until traffic finds it.
+    """
+
+    if not DISTRIBUTED:
+        return
+
+    now = time.time()
+    with LOCK:
+        due = now - STATE['registered_at'] >= RENEW_EVERY
+        if due:
+            STATE['registered_at'] = now
+
+    if due:
+        _safe_etcd(lambda: etcd.put(WORKFORCE_PREFIX + HOSTNAME, SELF_ENDPOINT,
+                                    ttl=STRIKE_TTL))
+
+
+@app.hook('before_request')
+def leadership():
+    """
+    " Ask etcd who leads and act accordingly. Requests drive the whole
+    " election: a leaderless workforce elects a leader on the next
+    " request, the leader renews its lease while requests come, and a
+    " struck or burnt out leader steps down the moment a request finds
+    " it. The resulting leadership is left in the environ for the rest
+    " of the request.
+    """
+
+    request.environ['strike.leader'] = None
+
+    if not DISTRIBUTED:
+        return
+
+    now = time.time()
+    with LOCK:
+        striking = now < STATE['strike_until']
+        burnt = now < STATE['burnout_until']
+        was_unhealthy = STATE['unhealthy']
+        STATE['unhealthy'] = striking or burnt
+    unhealthy = striking or burnt
+
+    if was_unhealthy and not unhealthy:
+        log_event('recovered')
+
+    try:
+        leader = etcd.get(LEADER_KEY)
+    except (EtcdError, OSError):
+        return  # etcd unreachable: behave as a follower, touch nothing
+
+    leading = False
+
+    if leader == HOSTNAME:
+        if striking or burnt:
+            _safe_etcd(lambda: etcd.delete_if_value(LEADER_KEY, HOSTNAME))
+            log_event('stepped_down', 'on strike' if striking
+                      else 'burned out')
+        elif now >= STATE['burnout_at']:
+            with LOCK:
+                STATE['burnout_until'] = now + random.uniform(STRIKE_MIN_TIME,
+                                                              STRIKE_MAX_TIME)
+            _safe_etcd(lambda: etcd.delete_if_value(LEADER_KEY, HOSTNAME))
+            log_event('burned_out', f"{STATE['burnout_until'] - now:.1f}s of teapot")
+        else:
+            leading = True
+            with LOCK:
+                due = now - STATE['renewed_at'] >= RENEW_EVERY
+                if due:
+                    STATE['renewed_at'] = now
+            if due:
+                renewed = _safe_etcd(lambda: etcd.put_if_value(
+                    LEADER_KEY, HOSTNAME, HOSTNAME, ttl=STRIKE_TTL))
+                if renewed is False:
+                    log_event('stepped_down', 'lost the leadership key')
+                    leading = False
+
+    elif leader is None and not unhealthy:
+        claimed = _safe_etcd(lambda: etcd.put_if_absent(
+            LEADER_KEY, HOSTNAME, ttl=STRIKE_TTL))
+        if claimed is True:
+            burnout_in = random.uniform(STRIKE_BURNOUT_MIN_TIME,
+                                        STRIKE_BURNOUT_MAX_TIME)
+            with LOCK:
+                STATE['burnout_at'] = now + burnout_in
+            log_event('elected', f"burnout in {burnout_in:.1f}s")
+            leading = True
+
+    request.environ['strike.leader'] = HOSTNAME if leading else None
+
+
 @app.hook('after_request')
 def set_final_headers():
     """
@@ -587,11 +624,6 @@ def set_final_headers():
     # delegated, it already relayed the colleague's signature.
     if not response.get_header('X-Served-By'):
         response.set_header('X-Served-By', HOSTNAME)
-
-    # The leader signs as the one leading, unless the answer already
-    # carries it (delegated answers are signed in the relay).
-    if DISTRIBUTED and am_leader() and not response.get_header('X-Leaded-By'):
-        response.set_header('X-Leaded-By', HOSTNAME)
 
 
 # POST creates and generates id
@@ -740,6 +772,13 @@ def strike():
         STATE['strike_until'] = now + duration
 
     log_event('on_strike', f"{duration:.1f}s")
+
+    # A leader on strike steps down right now, no waiting for the next
+    # request to find out.
+    if request.environ.get('strike.leader') == HOSTNAME:
+        _safe_etcd(lambda: etcd.delete_if_value(LEADER_KEY, HOSTNAME))
+        log_event('stepped_down', 'on strike')
+
     response.status = 200
     return f"on strike for {duration:.1f}s"
 
@@ -762,7 +801,6 @@ def health():
         strike_left = STATE['strike_until'] - now
         burnout_left = STATE['burnout_at'] - now
         burnt_left = STATE['burnout_until'] - now
-        leader = STATE['leader']
 
     if strike_left > 0:
         response.status = 418
@@ -772,12 +810,21 @@ def health():
         response.status = 418
         return f"burned out for {burnt_left:.1f}s"
 
-    if am_leader():
+    if request.environ.get('strike.leader') == HOSTNAME:
         if burnout_left > 0:
             return f"leading, burnout in {burnout_left:.1f}s"
         return "leading"
 
-    return f"healthy, leader: {leader or 'none'}"
+    if DISTRIBUTED:
+        try:
+            leader = etcd.get(LEADER_KEY)
+            detail = f"leader: {leader}" if leader else "leader: none"
+        except (EtcdError, OSError):
+            detail = "leader: unknown (etcd down)"
+    else:
+        detail = "leader: none"
+
+    return f"healthy, {detail}"
 
 
 @app.delete("/calc/<calc_id>")
