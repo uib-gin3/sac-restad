@@ -153,7 +153,9 @@ There is no background loop: the requests themselves drive everything.
 Two etcd key families hold the whole shared state, both with leases:
 
     strike/workforce/<hostname>   the http endpoint of each node
-    strike/leader                 the hostname of the leader
+    strike/leader                 the http endpoint of the leader, the
+                                  same format, so a client can use it
+                                  as its base URL directly
 
 Every request re-asserts its node's workforce membership (throttled to
 about twice per TTL) and asks etcd who leads. A leaderless workforce
