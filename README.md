@@ -79,6 +79,84 @@ with 0.11.8.
 Without uv it is also fine, as restad-bench is all Python stdlib.
 
 
+## The strike mode (sac-strike)
+
+restad doubles as the calculator fleet of the
+[sac-strike](https://github.com/uib-gin3/sac-strike) assignment ("The
+calculators' strike"): a leader elected through etcd delegates operations
+to its colleagues, nodes can go on strike and every leader lives on a
+burnout countdown. Everything is switched on by the `STRIKE_` environment
+variables; without them restad behaves exactly as described above.
+
+### New endpoints
+
+    POST localhost:12345/strike
+    # on strike for 4.2s
+    # While on strike every calculation answers 418 I'm a teapot
+    # and a leader steps down immediately.
+
+    GET localhost:12345/health
+    # healthy, leader: node3
+    # 200 when the node can serve, 418 (with the reason in the body)
+    # when it is on strike or burned out. It always answers, even when
+    # on strike, so whoever watches can see the recovery.
+
+### New headers
+
+    X-Served-By: node2   the hostname of the node that computed
+    X-Leaded-By: node1   the leader that orchestrated (when there was one)
+
+### Environment variables
+
+    STRIKE_ETCD                 host[:port] of etcd; together with
+                                STRIKE_COLLEAGUES it activates the
+                                distributed mode
+    STRIKE_COLLEAGUES           comma separated http endpoints of the
+                                fleet, the same list for everybody
+                                (themselves included)
+    STRIKE_LEADING_OVERHEAD     the leader computes itself with
+                                probability 1/N - (1/N * overhead),
+                                N being the number of instances
+    STRIKE_ALGORITHM            random (default), robust (delegate to
+                                the colleague with the fewest failures)
+                                or fastest (lowest average response
+                                time), chosen from the redis counters
+    STRIKE_MIN_TIME             strike window, minimum (2s)
+    STRIKE_MAX_TIME             strike window, maximum (6s)
+    STRIKE_BURNOUT_MIN_TIME     burnout countdown, minimum (8s)
+    STRIKE_BURNOUT_MAX_TIME     burnout countdown, maximum (20s)
+    STRIKE_RETRY                delegation attempts before giving up (5)
+    STRIKE_LEADER_TTL           lease of the etcd leader key (4s)
+    STRIKE_TIMEOUT              timeout of a delegated request (5s)
+
+### Metrics in redis
+
+The leader keeps track of who responded, how long it took and whether the
+operation failed:
+
+    strike:ok:<node>     successful answers per node
+    strike:fail:<node>   failed answers per node (418, 5xx, timeouts)
+    strike:time:<node>   accumulated seconds per node (the robust and
+                         fastest algorithms read these counters)
+    strike:self          operations the leader computed itself
+    strike:delegated     operations delegated to a colleague
+    strike:events        log of elections, step downs, strikes, burnouts
+                         and delegation failures
+
+### Notes
+
+The strike and leader state lives in the process memory, so the gunicorn
+deployment is now a single threaded worker (`--workers 1 --threads 8`)
+instead of four sync workers. Same API, the state just does not need to
+be synchronised between processes.
+
+The election itself is a single etcd key (`strike/leader`) with a lease:
+a healthy node claims it when it is free and renews it while it leads; a
+struck or burned out leader deletes it and steps down, and if a leader
+dies the lease expires and the next node that sees the key empty claims
+it.
+
+
 ## Server interface
 
 Tried to follow HTTP Verb semantics:
@@ -210,3 +288,6 @@ Suggest the minimal changes keeping the style.
 - MiniMax-M3.1-flash (opencode): Can you check spell and grammar of the
 comments of (not code) of restad-server. Suggest the minimal changes keeping
 the style.
+- GLM-5.3-flash (opencode): Implement the strike mode (etcd leader
+election, delegation, strikes and burnouts) and etcdapi.py for the
+sac-strike assignment.
