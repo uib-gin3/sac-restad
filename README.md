@@ -149,8 +149,11 @@ deployment is now a single threaded worker (`--workers 1 --threads 8`)
 instead of four sync workers. Same API, the state just does not need to
 be synchronised between processes.
 
-There is no background loop: the requests themselves drive everything.
-Two etcd key families hold the whole shared state, both with leases:
+There is no background loop for the decisions, but there is a guardian:
+every node runs a keepalive thread that repeats the same pass the
+requests run (`beat()`), every TTL/3, so the etcd state never goes dark
+in the silence. Two etcd key families hold the whole shared state, both
+with leases:
 
     strike/workforce/<hostname>   the http endpoint of each node
     strike/leader                 the http endpoint of the leader, the
@@ -159,19 +162,21 @@ Two etcd key families hold the whole shared state, both with leases:
 
 Every request re-asserts its node's workforce membership (throttled to
 about twice per TTL) and asks etcd who leads. A leaderless workforce
-elects a leader on the next request with a compare-and-swap; the leader
-renews its lease while requests come; a struck or burned out leader
-deletes the key and steps down the moment a request finds it; and if a
-leader simply dies, the lease expires and the next request elects
-somebody else. The burnout countdown is evaluated the same way, so it
-fires on the first request after it expires. An idle fleet has no leader
-and lets memberships lapse; the first request that shows up starts
-everything again, and while users are being served there is (almost)
-always a leader.
+elects a leader on the next request or on the next guardian pass with a
+compare-and-swap; the leader renews its lease while requests come; a
+struck or burned out leader deletes the key and steps down the moment a
+pass finds it; and if a leader simply dies, the lease expires and the
+next pass elects somebody else (about TTL + TTL/3 at worst, ~5.3s with
+the defaults, even with zero traffic). The burnout countdown is
+evaluated by the clock, so it fires on time and an idle workforce keeps
+electing and burning out leaders forever. There is (almost) always a
+leader in etcd: only the sub-second transition gaps between a lease
+expiring and the next claim.
 
 When etcd is unreachable a node behaves as a follower and always serves
 locally; the workforce list falls back to the last known one. No etcd
-hiccup ever breaks a calculation.
+hiccup ever breaks a calculation, and an etcd outage longer than about
+two beats (~2.6s) just drops the leadership until the etcd is back.
 
 
 ## Server interface

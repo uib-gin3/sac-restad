@@ -164,10 +164,12 @@ def parse_operands():
 #
 # The calculators' strike: a leader elected through etcd, delegation to
 # the workforce, strikes and burnouts. All of it is switched on by the
-# STRIKE_ environment variables and, fittingly for a strike, there is
-# no management: the requests themselves drive the membership, the
-# elections, the renewals and the step downs. Without the variables the
-# calculator below behaves exactly as it always did.
+# STRIKE_ environment variables. Requests drive the decisions (the
+# hook runs the same beat the guardian thread runs), and a guardian
+# thread keeps the etcd state alive when nobody is talking to the
+# workforce: always a leader in etcd, burnout countdowns firing on
+# time even in the silence. Without the variables the calculator below
+# behaves exactly as it always did.
 
 HOSTNAME = socket.gethostname()
 
@@ -486,6 +488,111 @@ def workforce():
         return dict(STATE['workforce'])
 
 
+def beat():
+    """ One pass of the distributed keepalive: membership and leadership.
+
+    " Runs on every request (the hook) and, when nobody is talking to
+    " the workforce, from the guardian thread: the state in etcd never
+    " goes dark. It re-asserts this node's membership (throttled to
+    " about twice per TTL), elects a leader when the key is free,
+    " renews the lease while leading, and steps down — strike or
+    " burnout countdown — the moment a pass finds the node unhealthy.
+    " Returns the leader endpoint as etcd sees it, or None.
+    """
+
+    now = time.time()
+    with LOCK:
+        striking = now < STATE['strike_until']
+        burnt = now < STATE['burnout_until']
+        was_unhealthy = STATE['unhealthy']
+        STATE['unhealthy'] = striking or burnt
+    unhealthy = striking or burnt
+
+    if was_unhealthy and not unhealthy:
+        log_event('recovered')
+
+    # membership
+    with LOCK:
+        due = now - STATE['registered_at'] >= RENEW_EVERY
+        if due:
+            STATE['registered_at'] = now
+    if due:
+        _safe_etcd(lambda: etcd.put(WORKFORCE_PREFIX + HOSTNAME, SELF_ENDPOINT,
+                                    ttl=STRIKE_TTL))
+
+    # leadership
+    try:
+        leader = etcd.get(LEADER_KEY)
+    except (EtcdError, OSError):
+        return None  # etcd unreachable: behave as a follower, touch nothing
+
+    leading = False
+
+    if leader == SELF_ENDPOINT:
+        if striking or burnt:
+            if _safe_etcd(lambda: etcd.delete_if_value(LEADER_KEY, SELF_ENDPOINT)):
+                log_event('stepped_down', 'on strike' if striking
+                          else 'burned out')
+        elif now >= STATE['burnout_at']:
+            # the auto-destruction countdown fires by the clock, even
+            # without traffic; the check-and-set under the lock keeps
+            # two concurrent passes from opening it twice
+            with LOCK:
+                due = now >= STATE['burnout_at'] and now >= STATE['burnout_until']
+                if due:
+                    STATE['burnout_until'] = now + random.uniform(STRIKE_MIN_TIME,
+                                                                  STRIKE_MAX_TIME)
+            if due and _safe_etcd(lambda: etcd.delete_if_value(LEADER_KEY,
+                                                               SELF_ENDPOINT)):
+                log_event('burned_out', f"{STATE['burnout_until'] - now:.1f}s of teapot")
+        else:
+            leading = True
+            with LOCK:
+                due = now - STATE['renewed_at'] >= RENEW_EVERY
+                if due:
+                    STATE['renewed_at'] = now
+            if due:
+                renewed = _safe_etcd(lambda: etcd.put_if_value(
+                    LEADER_KEY, SELF_ENDPOINT, SELF_ENDPOINT, ttl=STRIKE_TTL))
+                if renewed is False:
+                    log_event('stepped_down', 'lost the leadership key')
+                    leading = False
+
+    elif leader is None and not unhealthy:
+        claimed = _safe_etcd(lambda: etcd.put_if_absent(
+            LEADER_KEY, SELF_ENDPOINT, ttl=STRIKE_TTL))
+        if claimed is True:
+            burnout_in = random.uniform(STRIKE_BURNOUT_MIN_TIME,
+                                        STRIKE_BURNOUT_MAX_TIME)
+            with LOCK:
+                STATE['burnout_at'] = now + burnout_in
+            log_event('elected', f"burnout in {burnout_in:.1f}s")
+            leading = True
+
+    return SELF_ENDPOINT if leading else None
+
+
+def guardian():
+    """ The keepalive thread.
+
+    " Requests drive the decisions, but silence kills the leases: this
+    " thread runs the same beat() when nobody is talking to the
+    " workforce, so there is always a value at etcd for the leader and
+    " the burnout countdowns fire on time even with no traffic at all.
+    """
+
+    while True:
+        try:
+            beat()
+        except (EtcdError, OSError):
+            pass  # etcd unreachable: retry on the next beat
+        time.sleep(RENEW_EVERY)
+
+
+if DISTRIBUTED:
+    threading.Thread(target=guardian, name='guardian', daemon=True).start()
+
+
 ######################### The app itself ###################################
 
 app = Bottle()
@@ -516,98 +623,17 @@ def set_default_headers():
 
 
 @app.hook('before_request')
-def workforce_membership():
+def heartbeat():
     """
-    " Any request re-asserts this node's membership of the workforce:
-    " its endpoint, attached to a fresh lease. Throttled to about twice
-    " per TTL, so a busy node does not write etcd on every request and
-    " a quiet node lets its membership lapse until traffic finds it.
-    """
-
-    if not DISTRIBUTED:
-        return
-
-    now = time.time()
-    with LOCK:
-        due = now - STATE['registered_at'] >= RENEW_EVERY
-        if due:
-            STATE['registered_at'] = now
-
-    if due:
-        _safe_etcd(lambda: etcd.put(WORKFORCE_PREFIX + HOSTNAME, SELF_ENDPOINT,
-                                    ttl=STRIKE_TTL))
-
-
-@app.hook('before_request')
-def leadership():
-    """
-    " Ask etcd who leads and act accordingly. Requests drive the whole
-    " election: a leaderless workforce elects a leader on the next
-    " request, the leader renews its lease while requests come, and a
-    " struck or burnt out leader steps down the moment a request finds
-    " it. The resulting leadership is left in the environ for the rest
-    " of the request.
+    " Every request is also a beat: it re-asserts this node's
+    " membership of the workforce and asks etcd who leads, claiming,
+    " renewing or stepping down as needed. The guardian thread runs
+    " the same beat() when nobody is talking to the workforce. The
+    " resulting leadership is left in the environ for the rest of the
+    " request.
     """
 
-    request.environ['strike.leader'] = None
-
-    if not DISTRIBUTED:
-        return
-
-    now = time.time()
-    with LOCK:
-        striking = now < STATE['strike_until']
-        burnt = now < STATE['burnout_until']
-        was_unhealthy = STATE['unhealthy']
-        STATE['unhealthy'] = striking or burnt
-    unhealthy = striking or burnt
-
-    if was_unhealthy and not unhealthy:
-        log_event('recovered')
-
-    try:
-        leader = etcd.get(LEADER_KEY)
-    except (EtcdError, OSError):
-        return  # etcd unreachable: behave as a follower, touch nothing
-
-    leading = False
-
-    if leader == SELF_ENDPOINT:
-        if striking or burnt:
-            _safe_etcd(lambda: etcd.delete_if_value(LEADER_KEY, SELF_ENDPOINT))
-            log_event('stepped_down', 'on strike' if striking
-                      else 'burned out')
-        elif now >= STATE['burnout_at']:
-            with LOCK:
-                STATE['burnout_until'] = now + random.uniform(STRIKE_MIN_TIME,
-                                                              STRIKE_MAX_TIME)
-            _safe_etcd(lambda: etcd.delete_if_value(LEADER_KEY, SELF_ENDPOINT))
-            log_event('burned_out', f"{STATE['burnout_until'] - now:.1f}s of teapot")
-        else:
-            leading = True
-            with LOCK:
-                due = now - STATE['renewed_at'] >= RENEW_EVERY
-                if due:
-                    STATE['renewed_at'] = now
-            if due:
-                renewed = _safe_etcd(lambda: etcd.put_if_value(
-                    LEADER_KEY, SELF_ENDPOINT, SELF_ENDPOINT, ttl=STRIKE_TTL))
-                if renewed is False:
-                    log_event('stepped_down', 'lost the leadership key')
-                    leading = False
-
-    elif leader is None and not unhealthy:
-        claimed = _safe_etcd(lambda: etcd.put_if_absent(
-            LEADER_KEY, SELF_ENDPOINT, ttl=STRIKE_TTL))
-        if claimed is True:
-            burnout_in = random.uniform(STRIKE_BURNOUT_MIN_TIME,
-                                        STRIKE_BURNOUT_MAX_TIME)
-            with LOCK:
-                STATE['burnout_at'] = now + burnout_in
-            log_event('elected', f"burnout in {burnout_in:.1f}s")
-            leading = True
-
-    request.environ['strike.leader'] = SELF_ENDPOINT if leading else None
+    request.environ['strike.leader'] = beat() if DISTRIBUTED else None
 
 
 @app.hook('after_request')
@@ -776,8 +802,8 @@ def strike():
     # A leader on strike steps down right now, no waiting for the next
     # request to find out.
     if request.environ.get('strike.leader') == SELF_ENDPOINT:
-        _safe_etcd(lambda: etcd.delete_if_value(LEADER_KEY, SELF_ENDPOINT))
-        log_event('stepped_down', 'on strike')
+        if _safe_etcd(lambda: etcd.delete_if_value(LEADER_KEY, SELF_ENDPOINT)):
+            log_event('stepped_down', 'on strike')
 
     response.status = 200
     return f"on strike for {duration:.1f}s"
